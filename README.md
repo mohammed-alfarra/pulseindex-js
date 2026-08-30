@@ -5,7 +5,7 @@ Official Node.js & TypeScript client for **PulseIndex** — the ultra-fast, in-m
 This package talks to the PulseIndex Engine over gRPC using the canonical [`engine.proto`](./proto/engine.proto) contract (`pulseindex.engine.v1.SearchEngineService`). The engine stores no entity payloads — only bitwise indexes — and returns matched entity IDs for you to hydrate from a primary data store.
 
 [![CI](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml/badge.svg)](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/pulseindex.svg)](https://www.npmjs.com/package/pulseindex)
+[![npm version](https://img.shields.io/npm/v/@pulseindex/sdk.svg)](https://www.npmjs.com/package/@pulseindex/sdk)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -20,23 +20,23 @@ This package talks to the PulseIndex Engine over gRPC using the canonical [`engi
 ## Installation
 
 ```bash
-npm install pulseindex
+npm install @pulseindex/sdk
 ```
 
 ```bash
-pnpm add pulseindex
+pnpm add @pulseindex/sdk
 ```
 
 ESM:
 
 ```ts
-import PulseIndex, { GeoHash } from 'pulseindex';
+import PulseIndex, { GeoHash } from '@pulseindex/sdk';
 ```
 
 CommonJS:
 
 ```js
-const { PulseIndex, GeoHash } = require('pulseindex');
+const { PulseIndex, GeoHash } = require('@pulseindex/sdk');
 ```
 
 Requires Node.js 18 or later. The engine gRPC endpoint defaults to `localhost:50051`.
@@ -44,7 +44,7 @@ Requires Node.js 18 or later. The engine gRPC endpoint defaults to `localhost:50
 ## Quickstart
 
 ```ts
-import PulseIndex, { GeoHash } from 'pulseindex';
+import PulseIndex, { GeoHash } from '@pulseindex/sdk';
 
 const client = new PulseIndex({
   endpoint: 'localhost:50051',
@@ -211,7 +211,7 @@ Precision is chosen from radius, then covering cells are emitted as SHOULD `geo:
 `GeoHash.neighborhood3x3()` returns the centre cell plus eight neighbors. `withinRadius()` uses intersecting covering cells (same algorithm as `pulseindex-php`) so oversized neighbors are not OR'd in.
 
 ```ts
-import { GeoHash } from 'pulseindex';
+import { GeoHash } from '@pulseindex/sdk';
 
 GeoHash.encode(42.6, -5.6, 5); // 'ezs42'
 GeoHash.tag('ezs42'); // 'geo:5:ezs42'
@@ -231,7 +231,7 @@ import {
   PulseIndexAuthError,
   PulseIndexConnectionError,
   PulseIndexQueryError,
-} from 'pulseindex';
+} from '@pulseindex/sdk';
 
 try {
   await client.search(PulseIndex.query().must('feature:pool').limit(20));

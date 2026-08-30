@@ -1,5 +1,5 @@
 {
-  "name": "pulseindex",
+  "name": "@pulseindex/sdk",
   "version": "1.0.0",
   "description": "Official Node.js & TypeScript SDK for the PulseIndex ultra-fast search engine",
   "license": "MIT",
