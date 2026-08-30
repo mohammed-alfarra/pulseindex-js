@@ -1,0 +1,330 @@
+# PulseIndex JavaScript / TypeScript SDK
+
+Official Node.js & TypeScript client for **PulseIndex** — the ultra-fast, in-memory bitwise vector and categorical search sidecar.
+
+This package talks to the PulseIndex Engine over gRPC using the canonical [`engine.proto`](./proto/engine.proto) contract (`pulseindex.engine.v1.SearchEngineService`). The engine stores no entity payloads — only bitwise indexes — and returns matched entity IDs for you to hydrate from a primary data store.
+
+[![CI](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml/badge.svg)](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/pulseindex.svg)](https://www.npmjs.com/package/pulseindex)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](#installation)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
+## Key features
+
+- Dual ESM / CommonJS build for Node.js 18+
+- Typed fluent `QueryBuilder` matching `pulseindex-php`
+- Zero-dependency GeoHash radius coverage (`geo:{precision}:{hash}`)
+- Connection pooling, deadlines, and `x-api-key` / `Authorization: Bearer` metadata
+- Attribute flattening for index-time bitwise terms (categories, flags, geo tags, price)
+
+## Installation
+
+```bash
+npm install pulseindex
+```
+
+```bash
+pnpm add pulseindex
+```
+
+ESM:
+
+```ts
+import PulseIndex, { GeoHash } from 'pulseindex';
+```
+
+CommonJS:
+
+```js
+const { PulseIndex, GeoHash } = require('pulseindex');
+```
+
+Requires Node.js 18 or later. The engine gRPC endpoint defaults to `localhost:50051`.
+
+## Quickstart
+
+```ts
+import PulseIndex, { GeoHash } from 'pulseindex';
+
+const client = new PulseIndex({
+  endpoint: 'localhost:50051',
+  apiKey: process.env.PULSEINDEX_API_KEY,
+  tenantId: 'acme_corp',
+});
+
+await client.index('1001', {
+  categories: ['features:swimming_pool'],
+  category: 'villa',
+  status: 'listed',
+  price: 250000,
+  lat: 41.0082,
+  lng: 28.9784,
+});
+
+const result = await client.search(
+  PulseIndex.query()
+    .tenant('acme_corp')
+    .must('features:swimming_pool')
+    .should(['category:villa', 'category:apartment'])
+    .mustNot('status:sold')
+    .range('price', 100000, 500000)
+    .withinRadius({ lat: 41.0082, lng: 28.9784, radiusKm: 5 })
+    .limit(50),
+);
+
+const ids = result.matchedEntityIds;
+await client.close();
+```
+
+Index-time geo tags should use the same dual precision as radius queries:
+
+```ts
+const tags = GeoHash.encodeMultiTags(41.0082, 28.9784);
+// ['geo:5:sxk97', 'geo:6:sxk976'] (example)
+```
+
+## gRPC configuration
+
+Create a client against any PulseIndex Engine endpoint. Production customer gRPC should set `ssl: true` (or `PULSEINDEX_SSL=true`). The default is plaintext for local development.
+
+```ts
+const client = PulseIndex.create(
+  'engine.example.com:443',
+  process.env.PULSEINDEX_API_KEY,
+  true,
+);
+```
+
+| Option | Env var | Default | Description |
+| --- | --- | --- | --- |
+| `endpoint` / `host` | `PULSEINDEX_ENDPOINT`, `PULSEINDEX_HOST` | `localhost:50051` | Engine `host:port` |
+| `apiKey` | `PULSEINDEX_API_KEY` | — | Sent as `x-api-key` and `Authorization: Bearer` |
+| `authorization` | `PULSEINDEX_AUTHORIZATION` | — | Overrides the Bearer token when set |
+| `tenantId` | `PULSEINDEX_TENANT_ID` | `''` (engine uses `default`) | Default tenant for index / search / delete |
+| `timeoutMs` | — | `5000` | Per-RPC deadline |
+| `ssl` | `PULSEINDEX_SSL` | `false` | Enable TLS |
+| `rootCerts` / `privateKey` / `certChain` | — | — | Optional custom TLS materials |
+| `poolSize` | — | `1` | Number of multiplexed gRPC clients |
+| `protoPath` | — | packaged `proto/engine.proto` | Override the proto file |
+| `channelOptions` | — | keepalive defaults | Extra `@grpc/grpc-js` channel options |
+
+The engine accepts **either** `x-api-key: <key>` **or** `authorization: Bearer <key>`. Valid keys are configured on the server with `PULSEINDEX_API_KEYS`. Every mutating / query RPC that touches index state carries `tenant_id`; an empty value is normalized server-side to `"default"`.
+
+```ts
+const client = new PulseIndex({
+  endpoint: process.env.PULSEINDEX_HOST,
+  apiKey: process.env.PULSEINDEX_API_KEY,
+  tenantId: 'acme_corp',
+  timeoutMs: 5000,
+  ssl: true,
+  poolSize: 2,
+});
+```
+
+## Indexing
+
+`index()` accepts a string/number entity id plus a flat attribute object. Reserved keys (`price`, `tenantId`, `lat` / `lng`, `categories`, …) are mapped onto the proto fields; every other key becomes a namespaced bitwise term (`status:listed`, `amenities:parking`). Coordinates automatically add `geo:5:…` and `geo:6:…` tags.
+
+```ts
+await client.index('1001', {
+  categories: ['feature:pool'],
+  amenities: ['parking', 'gym'],
+  furnished: true,
+  price: 1500,
+  lat: 24.7136,
+  lng: 46.6753,
+});
+
+await client.batchIndex([
+  { id: '1002', attributes: { categories: ['feature:garden'], price: 900 } },
+  { entityId: 1003, categories: ['feature:pool'], price: 2000 },
+]);
+
+await client.delete('1001');
+```
+
+Low-level PHP-compatible helper:
+
+```ts
+await client.indexEntity(1001, ['feature:pool', 'amenity:parking'], 1500, 0, 'acme');
+```
+
+`entity_id` is a proto `uint64`. Pass a string when the id may exceed `Number.MAX_SAFE_INTEGER`.
+
+## QueryBuilder
+
+The engine evaluates MUST (AND), SHOULD (OR group, then AND), MUST_NOT, optional `price` ranges, and returns ids only. `QueryBuilder` is immutable: each chained call returns a new builder.
+
+```ts
+const query = client
+  .query()
+  .tenant('acme_corp')
+  .must('feature:pool')
+  .should(['category:villa', 'category:apartment'])
+  .mustNot('status:sold')
+  .range('price', 1000, 5000)
+  .withinRadius({ lat: 24.7136, lng: 46.6753, radiusKm: 5 })
+  .limit(50)
+  .offset(0);
+
+const page = await query.execute();
+```
+
+Equivalent object form:
+
+```ts
+await client.search({
+  tenantId: 'acme_corp',
+  must: 'feature:pool',
+  should: ['category:villa', 'category:apartment'],
+  mustNot: 'status:sold',
+  ranges: [{ field: 'price', min: 100000, max: 500000 }],
+  withinRadius: { lat: 41.0082, lng: 28.9784, radiusKm: 5 },
+  limit: 50,
+});
+```
+
+| Method | Effect |
+| --- | --- |
+| `tenant(id)` | Set `tenant_id` |
+| `must(attr \| attr[])` | MUST filters |
+| `should(attr \| attr[])` | SHOULD filters (OR group) |
+| `mustNot(attr \| attr[])` | MUST_NOT filters |
+| `range(field, min, max)` | Numeric range (currently `price`) |
+| `withinRadius(lat, lon, km)` / `withinRadius({ lat, lng, radiusKm })` | SHOULD geo covering |
+| `whereGeoHash(hash)` / `inGeoHash(hash)` | MUST exact geo cell |
+| `location(prefix)` | Coarse `location_prefix` |
+| `limit(n)` / `offset(n)` | Pagination (`0` = unlimited) |
+| `toRequest()` | Compile the proto-shaped payload |
+| `execute()` | Search via the bound client |
+
+## GeoHash usage
+
+Precision is chosen from radius, then covering cells are emitted as SHOULD `geo:{precision}:{hash}` tags:
+
+| Radius | Precision | Approximate cell |
+| --- | --- | --- |
+| ≤ 1.5 km | 6 | ~1.2 km × 0.6 km |
+| ≤ 8.0 km | 5 | ~4.9 km × 4.9 km |
+| > 8.0 km | 4 | ~39 km × 19 km |
+
+`GeoHash.neighborhood3x3()` returns the centre cell plus eight neighbors. `withinRadius()` uses intersecting covering cells (same algorithm as `pulseindex-php`) so oversized neighbors are not OR'd in.
+
+```ts
+import { GeoHash } from 'pulseindex';
+
+GeoHash.encode(42.6, -5.6, 5); // 'ezs42'
+GeoHash.tag('ezs42'); // 'geo:5:ezs42'
+GeoHash.encodeMultiTags(41.0082, 28.9784);
+GeoHash.neighborhood3x3('ezs42'); // centre + 8 neighbors
+query.whereGeoHash('ezs42'); // MUST geo:5:ezs42
+```
+
+Also available: `decode`, `decodeBounds`, `neighbor`, `neighbors`, `neighborhoodTags`, `optimalPrecisionForRadius`, `getCoveringHashes`, `encodeTag`, `haversineKm`.
+
+## Error handling
+
+All RPC failures wrap gRPC status codes. Catch the typed subclass that matches the failure mode:
+
+```ts
+import {
+  PulseIndexAuthError,
+  PulseIndexConnectionError,
+  PulseIndexQueryError,
+} from 'pulseindex';
+
+try {
+  await client.search(PulseIndex.query().must('feature:pool').limit(20));
+} catch (error) {
+  if (error instanceof PulseIndexAuthError) {
+    // UNAUTHENTICATED / PERMISSION_DENIED — check x-api-key
+  } else if (error instanceof PulseIndexConnectionError) {
+    // UNAVAILABLE / DEADLINE_EXCEEDED — engine down or timeout
+  } else if (error instanceof PulseIndexQueryError) {
+    // INVALID_ARGUMENT / RESOURCE_EXHAUSTED — bad query or capacity
+  } else {
+    throw error;
+  }
+}
+```
+
+| Class | Typical gRPC statuses |
+| --- | --- |
+| `PulseIndexError` | Base class (`code`, `grpcStatusCode`, `grpcDetails`) |
+| `PulseIndexConnectionError` | `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `CANCELLED`, `ABORTED` |
+| `PulseIndexAuthError` | `UNAUTHENTICATED`, `PERMISSION_DENIED` |
+| `PulseIndexQueryError` | `INVALID_ARGUMENT`, `FAILED_PRECONDITION`, `RESOURCE_EXHAUSTED`, … |
+
+`client.health()` returns `false` instead of throwing when the channel is not ready.
+
+## API reference
+
+### `PulseIndex` / `PulseIndexClient`
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `new PulseIndex(config)` | client | Create a pooled gRPC client |
+| `PulseIndex.create(host, apiKey?, ssl?)` | client | Convenience constructor |
+| `PulseIndex.query()` | `QueryBuilder` | Unbound fluent query |
+| `client.query()` | `QueryBuilder` | Bound builder (`execute()` calls `search`) |
+| `client.search(query \| options)` | `SearchResponse` | Run `Search` |
+| `client.index(id, attributes)` | `{ success }` | Upsert one entity |
+| `client.batchIndex(entities)` | `{ indexedCount }` | Batch upsert |
+| `client.delete(id)` | `{ success }` | Soft-delete / tombstone |
+| `client.health()` | `boolean` | Channel ready + `GetRecoveryState` |
+| `client.createSnapshot()` | snapshot metadata | Force mmap snapshot |
+| `client.getRecoveryState()` | recovery metrics | CDC offset and index size |
+| `client.setCdcOffset(offset)` | `{ success }` | Store CDC watermark |
+| `client.close()` | `void` | Shut down the channel pool |
+
+`SearchResponse`:
+
+```ts
+{
+  matchedEntityIds: string[];
+  totalMatches: number;
+  executionTimeUs: number;
+}
+```
+
+## gRPC contract
+
+Service: `pulseindex.engine.v1.SearchEngineService`
+
+| RPC | Request | Response |
+| --- | --- | --- |
+| `IndexEntity` | `IndexEntityRequest` | `IndexEntityResponse` |
+| `BatchIndexEntities` | `BatchIndexEntitiesRequest` | `BatchIndexEntitiesResponse` |
+| `DeleteEntity` | `DeleteEntityRequest` | `DeleteEntityResponse` |
+| `Search` | `SearchQueryRequest` | `SearchQueryResponse` |
+| `CreateSnapshot` | `CreateSnapshotRequest` | `CreateSnapshotResponse` |
+| `GetRecoveryState` | `GetRecoveryStateRequest` | `GetRecoveryStateResponse` |
+| `SetCdcOffset` | `SetCdcOffsetRequest` | `SetCdcOffsetResponse` |
+
+There is no dedicated `HealthCheck` RPC on the engine. `health()` waits for the channel and calls `GetRecoveryState`.
+
+## Publishing
+
+CI runs on every push and pull request to `main` against Node.js 18, 20, and 22.
+
+To publish to npm, create a GitHub Release. The [publish workflow](.github/workflows/publish.yml) builds, tests, and runs `npm publish` using the `NPM_TOKEN` repository secret.
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+gh release create v1.0.0 --title "v1.0.0" --generate-notes
+```
+
+## Development
+
+```bash
+npm install
+npm test
+npm run build
+```
+
+Unit tests cover `QueryBuilder` compilation, GeoHash precision / neighbors / bounding-box math, and `x-api-key` metadata. Integration tests spin up an in-process mocked gRPC `SearchEngineService`.
+
+## License
+
+MIT
