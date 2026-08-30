@@ -305,7 +305,7 @@ There is no dedicated `HealthCheck` RPC on the engine. `health()` waits for the 
 
 ## Publishing
 
-CI runs on every push and pull request to `main` against Node.js 18, 20, and 22.
+CI runs on every push and pull request to `main` against Node.js 20, 22, and 24. The published client still supports Node.js 18+; the test toolchain (Vitest / Vite 7) requires Node 20.19+.
 
 To publish to npm, create a GitHub Release. The [publish workflow](.github/workflows/publish.yml) builds, tests, and runs `npm publish` using the `NPM_TOKEN` repository secret.
 
