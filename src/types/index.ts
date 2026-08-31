@@ -75,6 +75,14 @@ export interface RecoveryState {
   indexedCount: string;
   chunkCount: number;
   mutationsSinceSnapshot: string;
+  /**
+   * True when the engine lost both snapshot generations at cold boot. The index
+   * is empty, `Search` returns `UNAVAILABLE`, and the ingestion pipeline must
+   * re-push every live entity before calling `POST /recovery/reindex-complete`.
+   *
+   * Engines older than the field report `false`.
+   */
+  needsFullReindex: boolean;
 }
 
 export interface SetCdcOffsetResponse {

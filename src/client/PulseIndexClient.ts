@@ -173,6 +173,7 @@ export class PulseIndexClient implements QueryExecutor {
       indexedCount?: string | number;
       chunkCount?: number;
       mutationsSinceSnapshot?: string | number;
+      needsFullReindex?: boolean;
     }>((stub, metadata, options, callback) =>
       stub.getRecoveryState({}, metadata, options, callback),
     );
@@ -182,6 +183,10 @@ export class PulseIndexClient implements QueryExecutor {
       indexedCount: String(raw.indexedCount ?? '0'),
       chunkCount: Number(raw.chunkCount ?? 0),
       mutationsSinceSnapshot: String(raw.mutationsSinceSnapshot ?? '0'),
+      // Absent from engines predating the field; proto-loader `defaults: true`
+      // supplies `false`, and the `??` keeps that true for any transport that
+      // omits it entirely.
+      needsFullReindex: Boolean(raw.needsFullReindex ?? false),
     };
   }
 
