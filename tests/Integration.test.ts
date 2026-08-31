@@ -33,6 +33,10 @@ function metadataObject(metadata: grpc.Metadata): MetadataMap {
 async function startMockEngine(options: {
   searchIds?: string[];
   failAuth?: boolean;
+  /** Serve GetRecoveryState with needs_full_reindex set (degraded recovery). */
+  needsFullReindex?: boolean;
+  /** Omit field 5 entirely, as an engine predating it would. */
+  omitNeedsFullReindex?: boolean;
 } = {}): Promise<MockEngine> {
   const { service } = loadEngineProto();
   const server = new grpc.Server();
@@ -109,15 +113,22 @@ async function startMockEngine(options: {
         indexedCount: string;
         chunkCount: number;
         mutationsSinceSnapshot: string;
+        needsFullReindex?: boolean;
       }>,
     ) {
       capture('getRecoveryState', call);
-      callback(null, {
+      const base = {
         lastCdcOffset: '9',
         indexedCount: '3',
         chunkCount: 1,
         mutationsSinceSnapshot: '0',
-      });
+      };
+      callback(
+        null,
+        options.omitNeedsFullReindex
+          ? base
+          : { ...base, needsFullReindex: Boolean(options.needsFullReindex) },
+      );
     },
     setCdcOffset(
       call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>,
@@ -328,5 +339,53 @@ describe('PulseIndex client integration', () => {
     clients.push(client);
 
     await expect(client.index('1', { categories: ['x'] })).rejects.toBeInstanceOf(PulseIndexAuthError);
+  });
+
+  it('reports unhealthy while the engine is in degraded recovery', async () => {
+    // The engine allows GetRecoveryState while degraded — it is the detection
+    // mechanism — and denies Search with UNAVAILABLE. Before this contract
+    // existed, health() returned true here for as long as the outage lasted.
+    const engine = await startMockEngine({ needsFullReindex: true });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    const state = await client.getRecoveryState();
+    expect(state.needsFullReindex).toBe(true);
+    expect(await client.health()).toBe(false);
+  });
+
+  it('reports healthy when the engine is reachable and not degraded', async () => {
+    const engine = await startMockEngine({ needsFullReindex: false });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    const state = await client.getRecoveryState();
+    expect(state.needsFullReindex).toBe(false);
+    expect(await client.health()).toBe(true);
+  });
+
+  it('treats an engine that predates needs_full_reindex as not degraded', async () => {
+    // Wire compatibility: field 5 absent must not read as degraded, or every
+    // older engine would look unhealthy the moment this SDK is upgraded.
+    const engine = await startMockEngine({ omitNeedsFullReindex: true });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    const state = await client.getRecoveryState();
+    expect(state.needsFullReindex).toBe(false);
+    expect(await client.health()).toBe(true);
+  });
+
+  it('reports unhealthy when the engine is unreachable', async () => {
+    const client = new PulseIndexClient({
+      endpoint: '127.0.0.1:1',
+      apiKey: 'dev-key',
+      timeoutMs: 500,
+    });
+    clients.push(client);
+    expect(await client.health()).toBe(false);
   });
 });

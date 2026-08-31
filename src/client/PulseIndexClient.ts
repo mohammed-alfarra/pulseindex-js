@@ -141,11 +141,22 @@ export class PulseIndexClient implements QueryExecutor {
     return response.success;
   }
 
+  /**
+   * True only when the engine can serve reads.
+   *
+   * Requires the channel to be ready, `GetRecoveryState` to succeed, **and** the
+   * engine not to be in degraded recovery. A degraded engine still answers
+   * `GetRecoveryState` — that call is how the state is detected — while denying
+   * `Search` with `UNAVAILABLE`, so reachability alone is not health.
+   *
+   * Returns `false` rather than throwing. To tell *unreachable* apart from
+   * *degraded*, call {@link getRecoveryState} and read `needsFullReindex`.
+   */
   async health(): Promise<boolean> {
     try {
       await this.connection.waitForReady();
-      await this.getRecoveryState();
-      return true;
+      const state = await this.getRecoveryState();
+      return !state.needsFullReindex;
     } catch {
       return false;
     }
