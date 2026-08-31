@@ -329,6 +329,24 @@ There is no dedicated `HealthCheck` RPC on the engine. `health()` waits for the
 channel, calls `GetRecoveryState`, and treats `needs_full_reindex = true` as
 unhealthy.
 
+## Proto drift
+
+`proto/engine.proto` is a vendored copy of the engine's. Two guards keep it honest:
+
+| command | catches | runs in CI |
+| --- | --- | --- |
+| `npm test` (`tests/ProtoSchema.test.ts`) | any change to the vendored schema — field added, removed, renamed, renumbered, retyped, or an RPC changed | yes |
+| `npm run check:proto` | the **engine** moving ahead of this copy | no — the engine is a separate private repository |
+
+`check:proto` finds the engine at `$PULSEINDEX_PROTO` or a sibling checkout and
+skips (exit 0) when neither is present, so run it locally with the engine checked
+out beside this repository before syncing the proto. It reports schema differences
+semantically, and treats a comment-only difference as a warning rather than an error.
+
+The client reads response fields by name with `?? default` fallbacks, so a field the
+engine renames or removes is **silent at runtime** — the fallback simply wins. That
+is why the schema fixture is asserted in full rather than spot-checked.
+
 ## Publishing
 
 CI runs on every push and pull request to `main` against Node.js 20, 22, and 24. The published client still supports Node.js 18+; the test toolchain (Vitest / Vite 7) requires Node 20.19+.
