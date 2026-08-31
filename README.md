@@ -257,6 +257,30 @@ try {
 
 `client.health()` returns `false` instead of throwing when the channel is not ready.
 
+### Health and degraded recovery
+
+`client.health()` is `true` only when the engine can **serve reads**: the channel is
+ready, `GetRecoveryState` succeeds, and the engine is not in degraded recovery.
+
+If the engine loses both snapshot generations at cold boot it boots empty and
+degraded. In that state it answers `GetRecoveryState` — that call is how the state
+is detected — while `Search` returns `UNAVAILABLE`. Reachability alone is therefore
+not health, and the flag persists across restarts because it lives in the engine's
+snapshot header.
+
+To tell *unreachable* apart from *degraded*, read the flag directly:
+
+```ts
+const state = await client.getRecoveryState();
+if (state.needsFullReindex) {
+  // The index is empty. Re-push every live entity from the primary store,
+  // then POST /recovery/reindex-complete on the engine's admin port.
+}
+```
+
+Engines predating the `needs_full_reindex` field report `false`, so an older engine
+is never mistaken for a degraded one.
+
 ## API reference
 
 ### `PulseIndex` / `PulseIndexClient`
@@ -271,9 +295,9 @@ try {
 | `client.index(id, attributes)` | `{ success }` | Upsert one entity |
 | `client.batchIndex(entities)` | `{ indexedCount }` | Batch upsert |
 | `client.delete(id)` | `{ success }` | Soft-delete / tombstone |
-| `client.health()` | `boolean` | Channel ready + `GetRecoveryState` |
+| `client.health()` | `boolean` | Channel ready + `GetRecoveryState` succeeds + not in degraded recovery |
 | `client.createSnapshot()` | snapshot metadata | Force mmap snapshot |
-| `client.getRecoveryState()` | recovery metrics | CDC offset and index size |
+| `client.getRecoveryState()` | recovery metrics | CDC offset, index size, `needsFullReindex` |
 | `client.setCdcOffset(offset)` | `{ success }` | Store CDC watermark |
 | `client.close()` | `void` | Shut down the channel pool |
 
@@ -301,7 +325,9 @@ Service: `pulseindex.engine.v1.SearchEngineService`
 | `GetRecoveryState` | `GetRecoveryStateRequest` | `GetRecoveryStateResponse` |
 | `SetCdcOffset` | `SetCdcOffsetRequest` | `SetCdcOffsetResponse` |
 
-There is no dedicated `HealthCheck` RPC on the engine. `health()` waits for the channel and calls `GetRecoveryState`.
+There is no dedicated `HealthCheck` RPC on the engine. `health()` waits for the
+channel, calls `GetRecoveryState`, and treats `needs_full_reindex = true` as
+unhealthy.
 
 ## Publishing
 
