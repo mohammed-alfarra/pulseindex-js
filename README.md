@@ -4,7 +4,6 @@ Official Node.js & TypeScript client for **PulseIndex** — hosted search and fi
 
 You send attributes to index and queries to run; PulseIndex returns matching entity IDs, which you hydrate from your own database. Your records stay in your primary store — the service holds only what it needs to answer queries.
 
-[![CI](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml/badge.svg)](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@pulseindex/sdk.svg)](https://www.npmjs.com/package/@pulseindex/sdk)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)

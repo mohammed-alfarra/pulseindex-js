@@ -14,13 +14,9 @@
     "typescript",
     "nodejs"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/mohammed-alfarra/pulseindex-js.git"
-  },
-  "homepage": "https://github.com/mohammed-alfarra/pulseindex-js#readme",
+  "homepage": "https://usepulseindex.com",
   "bugs": {
-    "url": "https://github.com/mohammed-alfarra/pulseindex-js/issues"
+    "url": "https://usepulseindex.com/support"
   },
   "engines": {
     "node": ">=18"
