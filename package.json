@@ -40,7 +40,8 @@
         "default": "./dist/index.js"
       }
     },
-    "./proto/engine.proto": "./proto/engine.proto"
+    "./proto/engine.proto": "./proto/engine.proto",
+    "./proto/health.proto": "./proto/health.proto"
   },
   "files": [
     "dist",

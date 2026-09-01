@@ -10,6 +10,7 @@ export {
   PulseIndexQueryError,
 } from './errors/PulseIndexError';
 export { FilterOperation } from './types';
+export { SERVING_STATUS } from './grpc/loadProto';
 export type {
   BatchEntityInput,
   BatchIndexResponse,

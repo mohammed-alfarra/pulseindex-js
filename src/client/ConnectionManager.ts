@@ -8,6 +8,8 @@ import {
 } from '../types';
 import {
   loadEngineProto,
+  loadHealthProto,
+  type HealthClient,
   type SearchEngineServiceClient,
 } from '../grpc/loadProto';
 
@@ -84,6 +86,15 @@ export class ConnectionManager {
   private cursor = 0;
   private closed = false;
 
+  // Kept so the health stub can be built on demand with exactly the same
+  // address, credentials and options. grpc-js pools subchannels by that
+  // triple, so it rides the connection the engine pool already opened rather
+  // than dialling a second one.
+  private readonly credentials!: grpc.ChannelCredentials;
+  private readonly channelOptions!: Record<string, unknown>;
+  private readonly healthProtoPath?: string;
+  private healthStub?: HealthClient;
+
   constructor(config: PulseIndexClientConfig = {}) {
     this.endpoint = resolveEndpoint(config);
     this.tenantId = resolveTenantId(config);
@@ -103,6 +114,27 @@ export class ConnectionManager {
     for (let i = 0; i < poolSize; i += 1) {
       this.clients.push(new SearchEngineService(this.endpoint, credentials, channelOptions));
     }
+
+    this.credentials = credentials;
+    this.channelOptions = channelOptions;
+    this.healthProtoPath = config.healthProtoPath;
+  }
+
+  /**
+   * `grpc.health.v1.Health` stub, created on first use.
+   *
+   * The engine adds this service WITHOUT the auth interceptor, which is what
+   * makes it usable: every other way to ask whether the engine is degraded
+   * goes through GetRecoveryState, and that requires the `admin` scope, which
+   * the engine refuses to every tenant-bound key.
+   */
+  getHealthStub(): HealthClient {
+    this.assertOpen();
+    if (!this.healthStub) {
+      const Health = loadHealthProto(this.healthProtoPath);
+      this.healthStub = new Health(this.endpoint, this.credentials, this.channelOptions);
+    }
+    return this.healthStub;
   }
 
   getStub(): SearchEngineServiceClient {
@@ -176,6 +208,8 @@ export class ConnectionManager {
       client.close();
     }
     this.clients.length = 0;
+    this.healthStub?.close();
+    this.healthStub = undefined;
   }
 
   private assertOpen(): void {

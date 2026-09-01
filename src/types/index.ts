@@ -174,6 +174,8 @@ export interface PulseIndexClientConfig {
   privateKey?: Buffer;
   certChain?: Buffer;
   protoPath?: string;
+  /** Override the bundled `health.proto`. Only needed if the package layout is rewritten. */
+  healthProtoPath?: string;
   poolSize?: number;
   channelOptions?: Record<string, unknown>;
 }

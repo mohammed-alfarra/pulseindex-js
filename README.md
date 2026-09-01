@@ -260,15 +260,31 @@ try {
 ### Health and degraded recovery
 
 `client.health()` is `true` only when the engine can **serve reads**: the channel is
-ready, `GetRecoveryState` succeeds, and the engine is not in degraded recovery.
+ready and `grpc.health.v1.Health` reports `SERVING`.
 
 If the engine loses both snapshot generations at cold boot it boots empty and
-degraded. In that state it answers `GetRecoveryState` — that call is how the state
-is detected — while `Search` returns `UNAVAILABLE`. Reachability alone is therefore
-not health, and the flag persists across restarts because it lives in the engine's
-snapshot header.
+degraded, and `Search` returns `UNAVAILABLE`. Reachability alone is therefore not
+health. The engine publishes that state on the health service, so `health()` sees
+it, and the flag persists across restarts because it lives in the engine's snapshot
+header.
 
-To tell *unreachable* apart from *degraded*, read the flag directly:
+**It does not use `GetRecoveryState`, and must not.** That RPC requires the `admin`
+scope, and the engine refuses `admin` to every tenant-bound key — which is every key
+the Portal issues. A `health()` built on it reports `false` for every customer,
+always, however healthy the engine is. The health service is the only readiness
+signal a customer key can read, because the engine serves it without its auth
+interceptor.
+
+For the raw status, including which service name was asked about:
+
+```ts
+import { SERVING_STATUS } from '@pulseindex/client';
+
+const status = await client.servingStatus();          // '' = overall server
+status === SERVING_STATUS.NOT_SERVING;                 // degraded
+```
+
+Holding an admin key, you can still read the flag directly:
 
 ```ts
 const state = await client.getRecoveryState();
@@ -295,7 +311,8 @@ is never mistaken for a degraded one.
 | `client.index(id, attributes)` | `{ success }` | Upsert one entity |
 | `client.batchIndex(entities)` | `{ indexedCount }` | Batch upsert |
 | `client.delete(id)` | `{ success }` | Soft-delete / tombstone |
-| `client.health()` | `boolean` | Channel ready + `GetRecoveryState` succeeds + not in degraded recovery |
+| `client.health()` | `boolean` | Channel ready + `grpc.health.v1` reports `SERVING` |
+| `client.servingStatus(service?)` | `number` | Raw `grpc.health.v1` status; `''` is the whole server |
 | `client.createSnapshot()` | snapshot metadata | Force mmap snapshot |
 | `client.getRecoveryState()` | recovery metrics | CDC offset, index size, `needsFullReindex` |
 | `client.setCdcOffset(offset)` | `{ success }` | Store CDC watermark |
@@ -325,9 +342,11 @@ Service: `pulseindex.engine.v1.SearchEngineService`
 | `GetRecoveryState` | `GetRecoveryStateRequest` | `GetRecoveryStateResponse` |
 | `SetCdcOffset` | `SetCdcOffsetRequest` | `SetCdcOffsetResponse` |
 
-There is no dedicated `HealthCheck` RPC on the engine. `health()` waits for the
-channel, calls `GetRecoveryState`, and treats `needs_full_reindex = true` as
-unhealthy.
+The engine also serves `grpc.health.v1.Health`, listed separately because it is the
+one service added **without** the auth interceptor — no API key is needed, and none
+is sent. It answers for two names: the engine's own service, and `''`, the
+overall-server key from the health spec. The engine writes both whenever it enters
+or leaves degraded recovery, so either answers correctly.
 
 ## Proto drift
 

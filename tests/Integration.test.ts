@@ -10,7 +10,12 @@ import {
   encodeEntity,
   sslEnabled,
 } from '../src';
-import { loadEngineProto } from '../src/grpc/loadProto';
+import * as protoLoader from '@grpc/proto-loader';
+import {
+  loadEngineProto,
+  resolveHealthProtoPath,
+  PROTO_LOADER_OPTIONS,
+} from '../src/grpc/loadProto';
 
 type MetadataMap = ReturnType<grpc.Metadata['getMap']>;
 
@@ -37,6 +42,19 @@ async function startMockEngine(options: {
   needsFullReindex?: boolean;
   /** Omit field 5 entirely, as an engine predating it would. */
   omitNeedsFullReindex?: boolean;
+  /**
+   * `grpc.health.v1` status this engine reports, for both the named service
+   * and the empty overall-server key. Defaults to SERVING; 2 is NOT_SERVING.
+   */
+  servingStatus?: number;
+  /** Serve no health service at all, as an engine predating it would. */
+  omitHealthService?: boolean;
+  /**
+   * Refuse GetRecoveryState with PERMISSION_DENIED, which is what production
+   * actually does for every customer key: that RPC needs the `admin` scope and
+   * the engine refuses `admin` to any tenant-bound key.
+   */
+  denyRecoveryState?: boolean;
 } = {}): Promise<MockEngine> {
   const { service } = loadEngineProto();
   const server = new grpc.Server();
@@ -52,6 +70,25 @@ async function startMockEngine(options: {
       metadata: metadataObject(call.metadata),
     });
   };
+
+  if (!options.omitHealthService) {
+    // The real engine adds this WITHOUT its auth interceptor, so the mock must
+    // answer regardless of credentials — a health service that demanded a key
+    // would not be testing the thing that makes this usable.
+    const healthDef = protoLoader.loadSync(resolveHealthProtoPath(), PROTO_LOADER_OPTIONS);
+    const healthPkg = grpc.loadPackageDefinition(healthDef) as unknown as {
+      grpc: { health: { v1: { Health: { service: grpc.ServiceDefinition } } } };
+    };
+    server.addService(healthPkg.grpc.health.v1.Health.service, {
+      check(
+        call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>,
+        callback: grpc.sendUnaryData<{ status: number }>,
+      ) {
+        capture('health.check', call);
+        callback(null, { status: options.servingStatus ?? 1 });
+      },
+    });
+  }
 
   server.addService(service, {
     indexEntity(
@@ -116,6 +153,13 @@ async function startMockEngine(options: {
         needsFullReindex?: boolean;
       }>,
     ) {
+      if (options.denyRecoveryState) {
+        callback({
+          code: grpc.status.PERMISSION_DENIED,
+          details: 'insufficient scope',
+        });
+        return;
+      }
       capture('getRecoveryState', call);
       const base = {
         lastCdcOffset: '9',
@@ -342,41 +386,49 @@ describe('PulseIndex client integration', () => {
   });
 
   it('reports unhealthy while the engine is in degraded recovery', async () => {
-    // The engine allows GetRecoveryState while degraded — it is the detection
-    // mechanism — and denies Search with UNAVAILABLE. Before this contract
-    // existed, health() returned true here for as long as the outage lasted.
-    const engine = await startMockEngine({ needsFullReindex: true });
+    // The engine publishes degraded recovery on grpc.health.v1 by flipping the
+    // status to NOT_SERVING, so the SDK learns it without any credential.
+    const engine = await startMockEngine({ servingStatus: 2 });
     engines.push(engine);
     const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
     clients.push(client);
 
-    const state = await client.getRecoveryState();
-    expect(state.needsFullReindex).toBe(true);
+    expect(await client.servingStatus()).toBe(2);
     expect(await client.health()).toBe(false);
   });
 
-  it('reports healthy when the engine is reachable and not degraded', async () => {
-    const engine = await startMockEngine({ needsFullReindex: false });
+  it('reports healthy when the engine is reachable and serving', async () => {
+    const engine = await startMockEngine({ servingStatus: 1 });
     engines.push(engine);
     const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
     clients.push(client);
 
-    const state = await client.getRecoveryState();
-    expect(state.needsFullReindex).toBe(false);
     expect(await client.health()).toBe(true);
   });
 
-  it('treats an engine that predates needs_full_reindex as not degraded', async () => {
-    // Wire compatibility: field 5 absent must not read as degraded, or every
-    // older engine would look unhealthy the moment this SDK is upgraded.
-    const engine = await startMockEngine({ omitNeedsFullReindex: true });
+  it('stays healthy when the key may not call GetRecoveryState', async () => {
+    // The regression this method was rewritten for. GetRecoveryState requires
+    // the `admin` scope and the engine refuses `admin` to every tenant-bound
+    // key, so health() built on it returned false for every customer, always,
+    // no matter how healthy the engine was.
+    const engine = await startMockEngine({ servingStatus: 1, denyRecoveryState: true });
     engines.push(engine);
     const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
     clients.push(client);
 
-    const state = await client.getRecoveryState();
-    expect(state.needsFullReindex).toBe(false);
+    await expect(client.getRecoveryState()).rejects.toBeTruthy();
     expect(await client.health()).toBe(true);
+  });
+
+  it('reports unhealthy against an engine with no health service', async () => {
+    // An engine predating this contract answers UNIMPLEMENTED. Reporting false
+    // is the honest answer: the SDK cannot tell whether it is serving.
+    const engine = await startMockEngine({ omitHealthService: true });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    expect(await client.health()).toBe(false);
   });
 
   it('reports unhealthy when the engine is unreachable', async () => {

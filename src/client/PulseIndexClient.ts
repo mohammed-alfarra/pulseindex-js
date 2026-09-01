@@ -23,7 +23,7 @@ import {
 } from '../types';
 import { ConnectionManager } from './ConnectionManager';
 import { encodeEntity, toUint64String } from './encodeEntity';
-import type { SearchEngineServiceClient } from '../grpc/loadProto';
+import { SERVING_STATUS, type SearchEngineServiceClient } from '../grpc/loadProto';
 
 export class PulseIndexClient implements QueryExecutor {
   readonly connection: ConnectionManager;
@@ -144,22 +144,55 @@ export class PulseIndexClient implements QueryExecutor {
   /**
    * True only when the engine can serve reads.
    *
-   * Requires the channel to be ready, `GetRecoveryState` to succeed, **and** the
-   * engine not to be in degraded recovery. A degraded engine still answers
-   * `GetRecoveryState` — that call is how the state is detected — while denying
-   * `Search` with `UNAVAILABLE`, so reachability alone is not health.
+   * Asks `grpc.health.v1.Health`, which the engine serves without its auth
+   * interceptor and updates whenever it enters or leaves degraded recovery. So
+   * this distinguishes a reachable-but-degraded engine from a healthy one, and
+   * a degraded engine reports `NOT_SERVING` rather than answering normally.
    *
-   * Returns `false` rather than throwing. To tell *unreachable* apart from
-   * *degraded*, call {@link getRecoveryState} and read `needsFullReindex`.
+   * It deliberately does **not** use `GetRecoveryState`, which is the obvious
+   * choice and the wrong one: that RPC requires the `admin` scope, and the
+   * engine refuses `admin` to every tenant-bound key. Built on it, this method
+   * returned `false` for every customer, always, whatever the engine's state.
+   *
+   * Returns `false` rather than throwing, so unreachable and degraded look the
+   * same here. Callers holding an admin key that need to tell them apart can
+   * still read `needsFullReindex` from {@link getRecoveryState}.
    */
   async health(): Promise<boolean> {
     try {
       await this.connection.waitForReady();
-      const state = await this.getRecoveryState();
-      return !state.needsFullReindex;
+      const status = await this.servingStatus();
+      return status === SERVING_STATUS.SERVING;
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Raw `grpc.health.v1` serving status for a service name.
+   *
+   * Defaults to `''`, the overall-server key defined by the health spec. The
+   * engine writes both that and its named service, because tonic-health pins
+   * the empty key to `SERVING` at construction and never revisits it — a
+   * server that only sets the named one reports a wholly degraded engine as
+   * fine to any client following the spec.
+   */
+  async servingStatus(service = ''): Promise<number> {
+    const stub = this.connection.getHealthStub();
+    return new Promise<number>((resolve, reject) => {
+      stub.check(
+        { service },
+        this.connection.createMetadata(),
+        this.connection.createCallOptions(),
+        (error, response) => {
+          if (error) {
+            reject(PulseIndexError.fromGrpc(error));
+            return;
+          }
+          resolve(response?.status ?? SERVING_STATUS.UNKNOWN);
+        },
+      );
+    });
   }
 
   async createSnapshot(): Promise<CreateSnapshotResponse> {
