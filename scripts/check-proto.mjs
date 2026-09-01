@@ -69,14 +69,33 @@ if (schemaDiff.length > 0) {
   process.exit(1);
 }
 
-// Same schema. Flag textual drift (comments, ordering) as a warning only: it
-// does not break the client, but the copies should stay identical.
-const normalise = (t) => t.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trimEnd();
-if (normalise(engineText) !== normalise(vendorText)) {
+// Same schema. Now compare layout — but with comments removed on both sides.
+//
+// The vendored copy is published: it ships inside the npm tarball and is
+// readable by anyone. Its comments are deliberately shorter than the engine's,
+// which describe internals that are not ours to publish. So a comment
+// difference is the intended state, not drift, and warning about it forever
+// would train everyone to ignore this check.
+//
+// What still has to match is everything that is not a comment: field numbers,
+// types, names, ordering. That is what a client actually depends on.
+const stripComments = (t) =>
+  t
+    .replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .map((line) => line.replace(/[ \t]+$/, ''))
+    .filter((line) => line.trim() !== '')
+    .join('\n');
+
+if (stripComments(engineText) !== stripComments(vendorText)) {
   console.log(`ok: schema matches the engine (${source})`);
-  console.log('warning: the files differ textually (comments or ordering) though the schema');
-  console.log(`         is identical. Re-sync when convenient: cp ${source} proto/engine.proto`);
+  console.log('warning: the files differ in layout (field ordering or formatting) beyond');
+  console.log('         comments. Re-sync the declarations, keeping the vendored comments:');
+  console.log(`         diff <(sed 's|//.*||' ${source}) <(sed 's|//.*||' proto/engine.proto)`);
   process.exit(0);
 }
 
-console.log(`ok: vendored proto is identical to the engine (${source})`);
+console.log(`ok: vendored proto matches the engine, declaration for declaration (${source})`);
+console.log('    comments differ by design — the vendored copy is published.');

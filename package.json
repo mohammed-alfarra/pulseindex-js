@@ -1,7 +1,7 @@
 {
   "name": "@pulseindex/sdk",
   "version": "1.1.0",
-  "description": "Official Node.js & TypeScript SDK for the PulseIndex ultra-fast search engine",
+  "description": "Official Node.js & TypeScript SDK for PulseIndex \u2014 hosted search and filtering for large entity sets",
   "license": "MIT",
   "author": "PulseIndex",
   "keywords": [
@@ -11,7 +11,6 @@
     "search",
     "indexing",
     "geohash",
-    "bitwise",
     "typescript",
     "nodejs"
   ],

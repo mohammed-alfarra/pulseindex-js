@@ -1,8 +1,8 @@
 # PulseIndex JavaScript / TypeScript SDK
 
-Official Node.js & TypeScript client for **PulseIndex** — the ultra-fast, in-memory bitwise vector and categorical search sidecar.
+Official Node.js & TypeScript client for **PulseIndex** — hosted search and filtering for large entity sets.
 
-This package talks to the PulseIndex Engine over gRPC using the canonical [`engine.proto`](./proto/engine.proto) contract (`pulseindex.engine.v1.SearchEngineService`). The engine stores no entity payloads — only bitwise indexes — and returns matched entity IDs for you to hydrate from a primary data store.
+You send attributes to index and queries to run; PulseIndex returns matching entity IDs, which you hydrate from your own database. Your records stay in your primary store — the service holds only what it needs to answer queries.
 
 [![CI](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml/badge.svg)](https://github.com/mohammed-alfarra/pulseindex-js/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@pulseindex/sdk.svg)](https://www.npmjs.com/package/@pulseindex/sdk)
@@ -15,7 +15,7 @@ This package talks to the PulseIndex Engine over gRPC using the canonical [`engi
 - Typed fluent `QueryBuilder` matching `pulseindex-php`
 - Zero-dependency GeoHash radius coverage (`geo:{precision}:{hash}`)
 - Connection pooling, deadlines, and `x-api-key` / `Authorization: Bearer` metadata
-- Attribute flattening for index-time bitwise terms (categories, flags, geo tags, price)
+- Attribute flattening so plain objects index without a schema (categories, flags, geo tags, price)
 
 ## Installation
 
@@ -123,7 +123,7 @@ const client = new PulseIndex({
 
 ## Indexing
 
-`index()` accepts a string/number entity id plus a flat attribute object. Reserved keys (`price`, `tenantId`, `lat` / `lng`, `categories`, …) are mapped onto the proto fields; every other key becomes a namespaced bitwise term (`status:listed`, `amenities:parking`). Coordinates automatically add `geo:5:…` and `geo:6:…` tags.
+`index()` accepts a string/number entity id plus a flat attribute object. Reserved keys (`price`, `tenantId`, `lat` / `lng`, `categories`, …) map onto dedicated fields; every other key becomes a namespaced term (`status:listed`, `amenities:parking`) you can filter on. Coordinates automatically add `geo:5:…` and `geo:6:…` tags.
 
 ```ts
 await client.index('1001', {
@@ -257,45 +257,28 @@ try {
 
 `client.health()` returns `false` instead of throwing when the channel is not ready.
 
-### Health and degraded recovery
+### Health
 
-`client.health()` is `true` only when the engine can **serve reads**: the channel is
-ready and `grpc.health.v1.Health` reports `SERVING`.
+`client.health()` is `true` only when the service can **serve reads**: the channel
+is ready and the standard health protocol reports `SERVING`. A reachable service
+that cannot currently answer queries reports `false`, so reachability alone is not
+treated as health.
 
-If the engine loses both snapshot generations at cold boot it boots empty and
-degraded, and `Search` returns `UNAVAILABLE`. Reachability alone is therefore not
-health. The engine publishes that state on the health service, so `health()` sees
-it, and the flag persists across restarts because it lives in the engine's snapshot
-header.
-
-**It does not use `GetRecoveryState`, and must not.** That RPC requires the `admin`
-scope, and the engine refuses `admin` to every tenant-bound key — which is every key
-the Portal issues. A `health()` built on it reports `false` for every customer,
-always, however healthy the engine is. The health service is the only readiness
-signal a customer key can read, because the engine serves it without its auth
-interceptor.
-
-For the raw status, including which service name was asked about:
+It returns `false` rather than throwing, which means unreachable and unavailable
+look the same. Use `servingStatus()` when you need to tell them apart:
 
 ```ts
-import { SERVING_STATUS } from '@pulseindex/client';
+import { SERVING_STATUS } from '@pulseindex/sdk';
 
-const status = await client.servingStatus();          // '' = overall server
-status === SERVING_STATUS.NOT_SERVING;                 // degraded
+const status = await client.servingStatus();
+status === SERVING_STATUS.SERVING;       // ready for queries
+status === SERVING_STATUS.NOT_SERVING;   // reachable, not currently serving
 ```
 
-Holding an admin key, you can still read the flag directly:
+`health()` needs no particular scope on your API key — it does not send one.
 
-```ts
-const state = await client.getRecoveryState();
-if (state.needsFullReindex) {
-  // The index is empty. Re-push every live entity from the primary store,
-  // then POST /recovery/reindex-complete on the engine's admin port.
-}
-```
-
-Engines predating the `needs_full_reindex` field report `false`, so an older engine
-is never mistaken for a degraded one.
+If `health()` stays `false` for more than a few minutes, retry with backoff rather
+than failing your own requests immediately; if it persists, contact support.
 
 ## API reference
 
@@ -310,12 +293,12 @@ is never mistaken for a degraded one.
 | `client.search(query \| options)` | `SearchResponse` | Run `Search` |
 | `client.index(id, attributes)` | `{ success }` | Upsert one entity |
 | `client.batchIndex(entities)` | `{ indexedCount }` | Batch upsert |
-| `client.delete(id)` | `{ success }` | Soft-delete / tombstone |
+| `client.delete(id)` | `{ success }` | Soft-delete an entity |
 | `client.health()` | `boolean` | Channel ready + `grpc.health.v1` reports `SERVING` |
 | `client.servingStatus(service?)` | `number` | Raw `grpc.health.v1` status; `''` is the whole server |
-| `client.createSnapshot()` | snapshot metadata | Force mmap snapshot |
-| `client.getRecoveryState()` | recovery metrics | CDC offset, index size, `needsFullReindex` |
-| `client.setCdcOffset(offset)` | `{ success }` | Store CDC watermark |
+| `client.createSnapshot()` | operation metadata | Operator use; requires an elevated key |
+| `client.getRecoveryState()` | index metrics | Operator use; requires an elevated key |
+| `client.setCdcOffset(offset)` | `{ success }` | Operator use; requires an elevated key |
 | `client.close()` | `void` | Shut down the channel pool |
 
 `SearchResponse`:
@@ -342,11 +325,10 @@ Service: `pulseindex.engine.v1.SearchEngineService`
 | `GetRecoveryState` | `GetRecoveryStateRequest` | `GetRecoveryStateResponse` |
 | `SetCdcOffset` | `SetCdcOffsetRequest` | `SetCdcOffsetResponse` |
 
-The engine also serves `grpc.health.v1.Health`, listed separately because it is the
-one service added **without** the auth interceptor — no API key is needed, and none
-is sent. It answers for two names: the engine's own service, and `''`, the
-overall-server key from the health spec. The engine writes both whenever it enters
-or leaves degraded recovery, so either answers correctly.
+The service also answers the standard `grpc.health.v1.Health` protocol. No API key
+is required for it, and none is sent. It responds for two names: the service's own,
+and `''` — the overall-server name from the health spec. Either is fine; `health()`
+uses `''`.
 
 ## Proto drift
 
