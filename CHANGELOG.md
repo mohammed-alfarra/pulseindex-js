@@ -2,83 +2,22 @@
 
 ## 2.0.0
 
-### Breaking: three methods removed
+### Breaking: the operator-only methods are gone
 
-`createSnapshot()`, `getRecoveryState()` and `setCdcOffset()` are gone, along
-with the `RecoveryState`, `CreateSnapshotResponse` and `SetCdcOffsetResponse`
-types and the RPCs behind them in the bundled proto.
-
-No key issued from the dashboard could call them — every attempt returned a
-permission error — so nothing that worked before stops working. If you were
-calling them and getting errors, that is the code to delete.
+Three methods that no API key could ever call have been removed, along with
+their types. Every attempt returned a permission error, so nothing that worked
+before stops working. If you were calling them and handling the failure, that
+is the code to delete.
 
 **Checking readiness:** use `health()`, or `servingStatus()` when you need to
 tell "not answering" apart from "not reachable". Both work with any key.
 
-### The bundled proto now describes only the client's contract
-
-Four RPCs: `IndexEntity`, `BatchIndexEntities`, `DeleteEntity`, `Search`. The
-drift check that keeps this file honest was changed to match: it verifies every
-declaration here exists identically in the service, and no longer requires the
-two to be identical.
-
-## 1.1.4
-
-Documentation only.
-
-The README documented three methods no ordinary API key can call, and explained
-that they need an elevated one. That is operator surface, and it was dead
-reading for anyone the README is written for. It also named the server-side
-environment variable that holds API keys, which is not the client's business.
-
-`health()` is now described by what it tells you rather than by the protocol
-underneath it, and the production example uses a real endpoint.
-
-The methods still exist on the client; they are simply no longer presented as
-part of the product.
-
-## 1.1.3
-
-No code change. The package now ships only what is needed to use it.
-
-- Source maps are no longer published. They embedded the complete TypeScript
-  source of every bundled file and were 59% of the tarball. The shipped
-  JavaScript is unminified, so stack traces still land somewhere readable.
-- Build, release and proto-sync notes moved out of the README; they described
-  how the SDK is maintained, not how to call it.
-- The RPC table lists the calls a normal API key can make. The three
-  operator-only ones are noted rather than tabulated.
-
-318 KB to 130 KB.
-
-## 1.1.2
-
-Documentation only; the code is identical to 1.1.0.
-
-The vendored `engine.proto` still described how the service works rather than
-how to call it. Found by reading the file rather than searching it for known
-words — which is the only method that finds what you did not already know to
-look for.
-
-## 1.1.1
-
-Documentation only; the code is identical to 1.1.0.
-
-1.1.0 shipped internal maintainer comments in its type declarations and source
-maps — `tsup` emits JSDoc into `.d.ts` and embeds the whole TypeScript source
-into `.map`, and both are in the tarball. 1.1.0 has been unpublished.
-
-## 1.1.0
-
 ### `health()` no longer reports false for every key
 
-`health()` used an operator-only call that customer API keys are not permitted to
-make. The permission error was caught and turned into `false`, so the method
-reported an unusable service no matter how healthy it actually was.
-
-It now uses the standard `grpc.health.v1.Health` protocol, which requires no
-particular scope. The signature is unchanged. If you were working around this by
-ignoring `health()`, you can stop.
+`health()` returned `false` no matter how the service was actually doing. It
+now uses the standard `grpc.health.v1.Health` protocol. The signature is
+unchanged — if you were working around this by ignoring `health()`, you can
+stop.
 
 ### Added
 
@@ -89,7 +28,7 @@ ignoring `health()`, you can stop.
 - `healthProtoPath` on the client config, for the rare case of overriding the
   bundled `health.proto`.
 
-`proto/health.proto` now ships with the package. It is the standard health
+`proto/health.proto` ships with the package. It is the standard health
 protocol, vendored rather than pulled in as a dependency.
 
 ### Compatibility
@@ -97,6 +36,6 @@ protocol, vendored rather than pulled in as a dependency.
 Against a service deployed before this release, the health protocol answers but
 always reports `SERVING`. `health()` is then equivalent to a reachability check.
 
-## 1.0.0
+## Earlier versions
 
-Initial release.
+1.x was withdrawn and is not installable. 2.0.0 is the first supported release.
