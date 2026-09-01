@@ -5,10 +5,9 @@
 // pulled from a package because it is a frozen protocol: it has not changed
 // since 2017, and a dependency for eleven lines is not worth the supply chain.
 //
-// It matters here because it is the only engine RPC served WITHOUT the auth
-// interceptor. Every other way to ask whether the engine is degraded goes
-// through GetRecoveryState, which requires the `admin` scope, and the engine
-// refuses `admin` to every tenant-bound key — so no customer key can use it.
+// It matters here because it needs no particular scope on the API key, unlike
+// the operator-only calls that also report readiness. It is the readiness
+// signal a customer key can always use.
 
 syntax = "proto3";
 

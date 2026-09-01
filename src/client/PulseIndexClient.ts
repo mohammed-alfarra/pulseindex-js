@@ -144,19 +144,17 @@ export class PulseIndexClient implements QueryExecutor {
   /**
    * True only when the engine can serve reads.
    *
-   * Asks `grpc.health.v1.Health`, which the engine serves without its auth
-   * interceptor and updates whenever it enters or leaves degraded recovery. So
-   * this distinguishes a reachable-but-degraded engine from a healthy one, and
-   * a degraded engine reports `NOT_SERVING` rather than answering normally.
+   * Asks `grpc.health.v1.Health`, which needs no particular scope and tracks
+   * whether the service can currently answer queries. So this distinguishes a
+   * reachable-but-unavailable service from a healthy one.
    *
-   * It deliberately does **not** use `GetRecoveryState`, which is the obvious
-   * choice and the wrong one: that RPC requires the `admin` scope, and the
-   * engine refuses `admin` to every tenant-bound key. Built on it, this method
-   * returned `false` for every customer, always, whatever the engine's state.
+   * It deliberately does **not** use `getRecoveryState()`, which is the obvious
+   * choice and the wrong one: that call is operator-only and customer keys are
+   * not permitted to make it. Built on it, this method returned `false` for
+   * every customer, always, whatever the service's state.
    *
-   * Returns `false` rather than throwing, so unreachable and degraded look the
-   * same here. Callers holding an admin key that need to tell them apart can
-   * still read `needsFullReindex` from {@link getRecoveryState}.
+   * Returns `false` rather than throwing, so unreachable and unavailable look
+   * the same here. Use {@link servingStatus} to tell them apart.
    */
   async health(): Promise<boolean> {
     try {
@@ -172,10 +170,7 @@ export class PulseIndexClient implements QueryExecutor {
    * Raw `grpc.health.v1` serving status for a service name.
    *
    * Defaults to `''`, the overall-server key defined by the health spec. The
-   * engine writes both that and its named service, because tonic-health pins
-   * the empty key to `SERVING` at construction and never revisits it — a
-   * server that only sets the named one reports a wholly degraded engine as
-   * fine to any client following the spec.
+   * service answers for both that and its named service.
    */
   async servingStatus(service = ''): Promise<number> {
     const stub = this.connection.getHealthStub();

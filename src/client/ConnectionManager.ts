@@ -123,10 +123,9 @@ export class ConnectionManager {
   /**
    * `grpc.health.v1.Health` stub, created on first use.
    *
-   * The engine adds this service WITHOUT the auth interceptor, which is what
-   * makes it usable: every other way to ask whether the engine is degraded
-   * goes through GetRecoveryState, and that requires the `admin` scope, which
-   * the engine refuses to every tenant-bound key.
+   * Separate from the engine pool because it is a different service, and
+   * unauthenticated because the health protocol needs no scope — which is what
+   * makes it usable from any key, unlike the operator-only readiness calls.
    */
   getHealthStub(): HealthClient {
     this.assertOpen();
