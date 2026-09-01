@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.3
+
+No code change. The package now ships only what is needed to use it.
+
+- Source maps are no longer published. They embedded the complete TypeScript
+  source of every bundled file and were 59% of the tarball. The shipped
+  JavaScript is unminified, so stack traces still land somewhere readable.
+- Build, release and proto-sync notes moved out of the README; they described
+  how the SDK is maintained, not how to call it.
+- The RPC table lists the calls a normal API key can make. The three
+  operator-only ones are noted rather than tabulated.
+
+318 KB to 130 KB.
+
 ## 1.1.2
 
 Documentation only; the code is identical to 1.1.0.
