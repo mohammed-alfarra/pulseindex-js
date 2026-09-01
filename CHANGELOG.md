@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2
+
+Documentation only; the code is identical to 1.1.0.
+
+The vendored `engine.proto` still described how the service works rather than
+how to call it. Found by reading the file rather than searching it for known
+words — which is the only method that finds what you did not already know to
+look for.
+
 ## 1.1.1
 
 Documentation only; the code is identical to 1.1.0.
