@@ -7,7 +7,6 @@ import {
 import {
   type BatchEntityInput,
   type BatchIndexResponse,
-  type CreateSnapshotResponse,
   type DeleteResponse,
   type EncodedEntity,
   type EntityAttributes,
@@ -16,10 +15,8 @@ import {
   type IndexEntityRequest,
   type IndexEntityResponse,
   type PulseIndexClientConfig,
-  type RecoveryState,
   type SearchRequestOptions,
   type SearchResponse,
-  type SetCdcOffsetResponse,
 } from '../types';
 import { ConnectionManager } from './ConnectionManager';
 import { encodeEntity, toUint64String } from './encodeEntity';
@@ -148,11 +145,6 @@ export class PulseIndexClient implements QueryExecutor {
    * whether the service can currently answer queries. So this distinguishes a
    * reachable-but-unavailable service from a healthy one.
    *
-   * It deliberately does **not** use `getRecoveryState()`, which is the obvious
-   * choice and the wrong one: that call is operator-only and customer keys are
-   * not permitted to make it. Built on it, this method returned `false` for
-   * every customer, always, whatever the service's state.
-   *
    * Returns `false` rather than throwing, so unreachable and unavailable look
    * the same here. Use {@link servingStatus} to tell them apart.
    */
@@ -190,52 +182,8 @@ export class PulseIndexClient implements QueryExecutor {
     });
   }
 
-  async createSnapshot(): Promise<CreateSnapshotResponse> {
-    const raw = await this.unary<{
-      success?: boolean;
-      path?: string;
-      lastCdcOffset?: string | number;
-    }>((stub, metadata, options, callback) =>
-      stub.createSnapshot({}, metadata, options, callback),
-    );
 
-    return {
-      success: Boolean(raw.success),
-      path: raw.path ?? '',
-      lastCdcOffset: String(raw.lastCdcOffset ?? '0'),
-    };
-  }
 
-  async getRecoveryState(): Promise<RecoveryState> {
-    const raw = await this.unary<{
-      lastCdcOffset?: string | number;
-      indexedCount?: string | number;
-      chunkCount?: number;
-      mutationsSinceSnapshot?: string | number;
-      needsFullReindex?: boolean;
-    }>((stub, metadata, options, callback) =>
-      stub.getRecoveryState({}, metadata, options, callback),
-    );
-
-    return {
-      lastCdcOffset: String(raw.lastCdcOffset ?? '0'),
-      indexedCount: String(raw.indexedCount ?? '0'),
-      chunkCount: Number(raw.chunkCount ?? 0),
-      mutationsSinceSnapshot: String(raw.mutationsSinceSnapshot ?? '0'),
-      // Absent from engines predating the field; proto-loader `defaults: true`
-      // supplies `false`, and the `??` keeps that true for any transport that
-      // omits it entirely.
-      needsFullReindex: Boolean(raw.needsFullReindex ?? false),
-    };
-  }
-
-  async setCdcOffset(offset: EntityId): Promise<SetCdcOffsetResponse> {
-    const raw = await this.unary<{ success?: boolean }>(
-      (stub, metadata, options, callback) =>
-        stub.setCdcOffset({ offset: String(offset) }, metadata, options, callback),
-    );
-    return { success: Boolean(raw.success) };
-  }
 
   close(): void {
     this.connection.close();

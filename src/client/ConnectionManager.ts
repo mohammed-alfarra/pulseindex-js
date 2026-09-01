@@ -123,9 +123,8 @@ export class ConnectionManager {
   /**
    * `grpc.health.v1.Health` stub, created on first use.
    *
-   * Separate from the engine pool because it is a different service, and
-   * unauthenticated because the health protocol needs no scope — which is what
-   * makes it usable from any key, unlike the operator-only readiness calls.
+   * A separate service from the query API, and unauthenticated: the health
+   * protocol needs no scope, so it works with any key or none.
    */
   getHealthStub(): HealthClient {
     this.assertOpen();

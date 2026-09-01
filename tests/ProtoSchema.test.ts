@@ -33,9 +33,6 @@ const EXPECTED: ProtoSchema = {
     'BatchIndexEntities(BatchIndexEntitiesRequest) -> BatchIndexEntitiesResponse',
     'DeleteEntity(DeleteEntityRequest) -> DeleteEntityResponse',
     'Search(SearchQueryRequest) -> SearchQueryResponse',
-    'CreateSnapshot(CreateSnapshotRequest) -> CreateSnapshotResponse',
-    'GetRecoveryState(GetRecoveryStateRequest) -> GetRecoveryStateResponse',
-    'SetCdcOffset(SetCdcOffsetRequest) -> SetCdcOffsetResponse',
   ],
   messages: {
     IndexEntityRequest: [
@@ -65,18 +62,6 @@ const EXPECTED: ProtoSchema = {
       '2:uint32 total_matches',
       '3:uint64 execution_time_us',
     ],
-    CreateSnapshotRequest: [],
-    CreateSnapshotResponse: ['1:bool success', '2:string path', '3:uint64 last_cdc_offset'],
-    GetRecoveryStateRequest: [],
-    GetRecoveryStateResponse: [
-      '1:uint64 last_cdc_offset',
-      '2:uint64 indexed_count',
-      '3:uint32 chunk_count',
-      '4:uint64 mutations_since_snapshot',
-      '5:bool needs_full_reindex',
-    ],
-    SetCdcOffsetRequest: ['1:uint64 offset'],
-    SetCdcOffsetResponse: ['1:bool success'],
   },
   enums: {
     'FilterPredicate.Operation': ['MUST=0', 'SHOULD=1', 'MUST_NOT=2'],
@@ -108,17 +93,15 @@ describe('vendored engine.proto schema', () => {
   });
 
   it('still carries the fields the client reads back', () => {
-    // These are read by name in PulseIndexClient with `?? default` fallbacks,
-    // so their removal or rename would be silent at runtime.
-    const recovery = actual.messages.GetRecoveryStateResponse ?? [];
+    // PulseIndexClient reads these by name with `?? default` fallbacks, so a
+    // rename or removal upstream would be silent at runtime rather than loud.
+    const search = actual.messages.SearchQueryResponse ?? [];
     for (const field of [
-      '1:uint64 last_cdc_offset',
-      '2:uint64 indexed_count',
-      '3:uint32 chunk_count',
-      '4:uint64 mutations_since_snapshot',
-      '5:bool needs_full_reindex',
+      '1:repeated uint64 matched_entity_ids',
+      '2:uint32 total_matches',
+      '3:uint64 execution_time_us',
     ]) {
-      expect(recovery, `GetRecoveryStateResponse lost ${field}`).toContain(field);
+      expect(search, `SearchQueryResponse lost ${field}`).toContain(field);
     }
   });
 });

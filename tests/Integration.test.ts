@@ -38,10 +38,6 @@ function metadataObject(metadata: grpc.Metadata): MetadataMap {
 async function startMockEngine(options: {
   searchIds?: string[];
   failAuth?: boolean;
-  /** Serve GetRecoveryState with needs_full_reindex set (degraded recovery). */
-  needsFullReindex?: boolean;
-  /** Omit field 5 entirely, as an engine predating it would. */
-  omitNeedsFullReindex?: boolean;
   /**
    * `grpc.health.v1` status this engine reports, for both the named service
    * and the empty overall-server key. Defaults to SERVING; 2 is NOT_SERVING.
@@ -49,12 +45,6 @@ async function startMockEngine(options: {
   servingStatus?: number;
   /** Serve no health service at all, as an engine predating it would. */
   omitHealthService?: boolean;
-  /**
-   * Refuse GetRecoveryState with PERMISSION_DENIED, which is what production
-   * actually does for every customer key: that RPC needs the `admin` scope and
-   * the engine refuses `admin` to any tenant-bound key.
-   */
-  denyRecoveryState?: boolean;
 } = {}): Promise<MockEngine> {
   const { service } = loadEngineProto();
   const server = new grpc.Server();
@@ -135,51 +125,6 @@ async function startMockEngine(options: {
         totalMatches: ids.length,
         executionTimeUs: '42',
       });
-    },
-    createSnapshot(
-      call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>,
-      callback: grpc.sendUnaryData<{ success: boolean; path: string; lastCdcOffset: string }>,
-    ) {
-      capture('createSnapshot', call);
-      callback(null, { success: true, path: '/tmp/snapshot.bin', lastCdcOffset: '9' });
-    },
-    getRecoveryState(
-      call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>,
-      callback: grpc.sendUnaryData<{
-        lastCdcOffset: string;
-        indexedCount: string;
-        chunkCount: number;
-        mutationsSinceSnapshot: string;
-        needsFullReindex?: boolean;
-      }>,
-    ) {
-      if (options.denyRecoveryState) {
-        callback({
-          code: grpc.status.PERMISSION_DENIED,
-          details: 'insufficient scope',
-        });
-        return;
-      }
-      capture('getRecoveryState', call);
-      const base = {
-        lastCdcOffset: '9',
-        indexedCount: '3',
-        chunkCount: 1,
-        mutationsSinceSnapshot: '0',
-      };
-      callback(
-        null,
-        options.omitNeedsFullReindex
-          ? base
-          : { ...base, needsFullReindex: Boolean(options.needsFullReindex) },
-      );
-    },
-    setCdcOffset(
-      call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>,
-      callback: grpc.sendUnaryData<{ success: boolean }>,
-    ) {
-      capture('setCdcOffset', call);
-      callback(null, { success: true });
     },
   });
 
@@ -403,20 +348,6 @@ describe('PulseIndex client integration', () => {
     const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
     clients.push(client);
 
-    expect(await client.health()).toBe(true);
-  });
-
-  it('stays healthy when the key may not call GetRecoveryState', async () => {
-    // The regression this method was rewritten for. GetRecoveryState requires
-    // the `admin` scope and the engine refuses `admin` to every tenant-bound
-    // key, so health() built on it returned false for every customer, always,
-    // no matter how healthy the engine was.
-    const engine = await startMockEngine({ servingStatus: 1, denyRecoveryState: true });
-    engines.push(engine);
-    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
-    clients.push(client);
-
-    await expect(client.getRecoveryState()).rejects.toBeTruthy();
     expect(await client.health()).toBe(true);
   });
 

@@ -14,7 +14,6 @@ export { SERVING_STATUS } from './grpc/loadProto';
 export type {
   BatchEntityInput,
   BatchIndexResponse,
-  CreateSnapshotResponse,
   DeleteResponse,
   EncodedEntity,
   EntityAttributes,
@@ -26,11 +25,9 @@ export type {
   PulseIndexClientConfig,
   RadiusOptions,
   RangePredicate,
-  RecoveryState,
   SearchQueryRequest,
   SearchRequestOptions,
   SearchResponse,
-  SetCdcOffsetResponse,
 } from './types';
 
 import { PulseIndex } from './client/PulseIndexClient';

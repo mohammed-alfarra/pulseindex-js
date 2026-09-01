@@ -64,30 +64,6 @@ export interface DeleteResponse {
   success: boolean;
 }
 
-export interface CreateSnapshotResponse {
-  success: boolean;
-  path: string;
-  lastCdcOffset: string;
-}
-
-export interface RecoveryState {
-  lastCdcOffset: string;
-  indexedCount: string;
-  chunkCount: number;
-  mutationsSinceSnapshot: string;
-  /**
-   * True when the tenant's index must be rebuilt from the primary store before
-   * it can serve queries. While set, `Search` returns `UNAVAILABLE`.
-   *
-   * Services older than the field report `false`.
-   */
-  needsFullReindex: boolean;
-}
-
-export interface SetCdcOffsetResponse {
-  success: boolean;
-}
-
 export interface RadiusOptions {
   lat: number;
   lng?: number;

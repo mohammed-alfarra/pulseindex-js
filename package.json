@@ -1,6 +1,6 @@
 {
   "name": "@pulseindex/sdk",
-  "version": "1.1.4",
+  "version": "2.0.0",
   "description": "Official Node.js & TypeScript SDK for PulseIndex — hosted search and filtering for large entity sets",
   "license": "MIT",
   "author": "PulseIndex",

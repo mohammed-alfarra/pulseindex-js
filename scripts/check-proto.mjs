@@ -17,7 +17,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { diffProtoSchemas, parseProtoSchema } from './protoSchema.mjs';
+import { diffProtoSubset, parseProtoSchema } from './protoSchema.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VENDORED = join(ROOT, 'proto', 'engine.proto');
@@ -51,7 +51,7 @@ if (explicit) {
 const engineText = readFileSync(source, 'utf8');
 const vendorText = readFileSync(VENDORED, 'utf8');
 
-const schemaDiff = diffProtoSchemas(parseProtoSchema(engineText), parseProtoSchema(vendorText));
+const schemaDiff = diffProtoSubset(parseProtoSchema(engineText), parseProtoSchema(vendorText));
 
 if (schemaDiff.length > 0) {
   console.error('error: vendored proto/engine.proto is out of sync with the engine.');
@@ -61,7 +61,9 @@ if (schemaDiff.length > 0) {
   console.error('       schema differences (engine -> vendored):');
   for (const line of schemaDiff) console.error(`         ${line}`);
   console.error('');
-  console.error(`       fix: cp ${source} proto/engine.proto`);
+  console.error(`       fix: bring the vendored declarations back in line with the engine.
+       The published copy may omit RPCs on purpose, but must never
+       declare anything the engine does not implement.`);
   console.error('       then update the fixture in tests/ProtoSchema.test.ts so the change is');
   console.error('       visible in review, and check whether PulseIndexClient must read any');
   console.error('       new or renamed field — it reads by name with `?? default` fallbacks,');
@@ -69,33 +71,6 @@ if (schemaDiff.length > 0) {
   process.exit(1);
 }
 
-// Same schema. Now compare layout — but with comments removed on both sides.
-//
-// The vendored copy is published: it ships inside the npm tarball and is
-// readable by anyone. Its comments are deliberately shorter than the engine's,
-// which describe internals that are not ours to publish. So a comment
-// difference is the intended state, not drift, and warning about it forever
-// would train everyone to ignore this check.
-//
-// What still has to match is everything that is not a comment: field numbers,
-// types, names, ordering. That is what a client actually depends on.
-const stripComments = (t) =>
-  t
-    .replace(/\r\n/g, '\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .map((line) => line.replace(/\/\/.*$/, ''))
-    .map((line) => line.replace(/[ \t]+$/, ''))
-    .filter((line) => line.trim() !== '')
-    .join('\n');
-
-if (stripComments(engineText) !== stripComments(vendorText)) {
-  console.log(`ok: schema matches the engine (${source})`);
-  console.log('warning: the files differ in layout (field ordering or formatting) beyond');
-  console.log('         comments. Re-sync the declarations, keeping the vendored comments:');
-  console.log(`         diff <(sed 's|//.*||' ${source}) <(sed 's|//.*||' proto/engine.proto)`);
-  process.exit(0);
-}
-
-console.log(`ok: vendored proto matches the engine, declaration for declaration (${source})`);
-console.log('    comments differ by design — the vendored copy is published.');
+console.log(`ok: every declaration in the vendored proto matches the engine (${source})`);
+console.log('    the published copy omits the operator RPCs on purpose, and its');
+console.log('    comments are shorter because it is published.');

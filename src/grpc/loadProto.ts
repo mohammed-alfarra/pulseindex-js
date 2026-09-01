@@ -38,24 +38,6 @@ export interface SearchEngineServiceClient extends grpc.Client {
     options: grpc.CallOptions,
     callback: grpc.requestCallback<unknown>,
   ): grpc.ClientUnaryCall;
-  createSnapshot(
-    request: unknown,
-    metadata: grpc.Metadata,
-    options: grpc.CallOptions,
-    callback: grpc.requestCallback<unknown>,
-  ): grpc.ClientUnaryCall;
-  getRecoveryState(
-    request: unknown,
-    metadata: grpc.Metadata,
-    options: grpc.CallOptions,
-    callback: grpc.requestCallback<unknown>,
-  ): grpc.ClientUnaryCall;
-  setCdcOffset(
-    request: unknown,
-    metadata: grpc.Metadata,
-    options: grpc.CallOptions,
-    callback: grpc.requestCallback<unknown>,
-  ): grpc.ClientUnaryCall;
 }
 
 export type SearchEngineServiceClientCtor = new (

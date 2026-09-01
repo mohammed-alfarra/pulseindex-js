@@ -95,3 +95,40 @@ export function diffProtoSchemas(expected, actual) {
 
   return out;
 }
+
+/**
+ * Check that `vendored` is a faithful subset of `engine`.
+ *
+ * The published proto deliberately omits the operator RPCs: no key the
+ * dashboard issues can call them, so they are not part of the client's
+ * contract. That makes equality the wrong test — what matters is that
+ * everything the client *does* declare matches the service exactly.
+ *
+ * Present in the engine only  -> fine, deliberately not exposed.
+ * Present in the vendored copy only -> error; the client would call something
+ *                                      the service does not implement.
+ * Present in both but different     -> error, in either direction.
+ */
+export function diffProtoSubset(engine, vendored) {
+  /** @type {string[]} */ const out = [];
+
+  for (const rpc of vendored.rpcs) {
+    if (!engine.rpcs.includes(rpc)) out.push(`+ rpc not in the engine: ${rpc}`);
+  }
+
+  for (const name of Object.keys(vendored.messages).sort()) {
+    const mine = vendored.messages[name];
+    const theirs = engine.messages[name];
+    if (!theirs) { out.push(`+ message not in the engine: ${name}`); continue; }
+    for (const f of mine) if (!theirs.includes(f)) out.push(`+ ${name}: ${f} is not in the engine`);
+    for (const f of theirs) if (!mine.includes(f)) out.push(`- ${name}: lost ${f}`);
+  }
+
+  for (const name of Object.keys(vendored.enums).sort()) {
+    const mine = (vendored.enums[name] ?? []).join(',');
+    const theirs = (engine.enums[name] ?? []).join(',');
+    if (mine !== theirs) out.push(`~ enum ${name}: engine [${theirs}] vs vendored [${mine}]`);
+  }
+
+  return out;
+}

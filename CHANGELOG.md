@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.0.0
+
+### Breaking: three methods removed
+
+`createSnapshot()`, `getRecoveryState()` and `setCdcOffset()` are gone, along
+with the `RecoveryState`, `CreateSnapshotResponse` and `SetCdcOffsetResponse`
+types and the RPCs behind them in the bundled proto.
+
+No key issued from the dashboard could call them — every attempt returned a
+permission error — so nothing that worked before stops working. If you were
+calling them and getting errors, that is the code to delete.
+
+**Checking readiness:** use `health()`, or `servingStatus()` when you need to
+tell "not answering" apart from "not reachable". Both work with any key.
+
+### The bundled proto now describes only the client's contract
+
+Four RPCs: `IndexEntity`, `BatchIndexEntities`, `DeleteEntity`, `Search`. The
+drift check that keeps this file honest was changed to match: it verifies every
+declaration here exists identically in the service, and no longer requires the
+two to be identical.
+
 ## 1.1.4
 
 Documentation only.
