@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+Documentation only; the code is identical to 1.1.0.
+
+1.1.0 shipped internal maintainer comments in its type declarations and source
+maps — `tsup` emits JSDoc into `.d.ts` and embeds the whole TypeScript source
+into `.map`, and both are in the tarball. 1.1.0 has been unpublished.
+
 ## 1.1.0
 
 ### `health()` no longer reports false for every key
