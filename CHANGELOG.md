@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.4
+
+Documentation only.
+
+The README documented three methods no ordinary API key can call, and explained
+that they need an elevated one. That is operator surface, and it was dead
+reading for anyone the README is written for. It also named the server-side
+environment variable that holds API keys, which is not the client's business.
+
+`health()` is now described by what it tells you rather than by the protocol
+underneath it, and the production example uses a real endpoint.
+
+The methods still exist on the client; they are simply no longer presented as
+part of the product.
+
 ## 1.1.3
 
 No code change. The package now ships only what is needed to use it.

@@ -88,7 +88,7 @@ Create a client against any PulseIndex Engine endpoint. Production customer gRPC
 
 ```ts
 const client = PulseIndex.create(
-  'engine.example.com:443',
+  'api.usepulseindex.com:50051',
   process.env.PULSEINDEX_API_KEY,
   true,
 );
@@ -107,7 +107,7 @@ const client = PulseIndex.create(
 | `protoPath` | — | packaged `proto/engine.proto` | Override the proto file |
 | `channelOptions` | — | keepalive defaults | Extra `@grpc/grpc-js` channel options |
 
-The engine accepts **either** `x-api-key: <key>` **or** `authorization: Bearer <key>`. Valid keys are configured on the server with `PULSEINDEX_API_KEYS`. Every mutating / query RPC that touches index state carries `tenant_id`; an empty value is normalized server-side to `"default"`.
+The client sends your key as `x-api-key`, and also as `Authorization: Bearer` — either is accepted. Every indexing and query call carries `tenant_id`; an empty value means `"default"`.
 
 ```ts
 const client = new PulseIndex({
@@ -293,11 +293,8 @@ than failing your own requests immediately; if it persists, contact support.
 | `client.index(id, attributes)` | `{ success }` | Upsert one entity |
 | `client.batchIndex(entities)` | `{ indexedCount }` | Batch upsert |
 | `client.delete(id)` | `{ success }` | Soft-delete an entity |
-| `client.health()` | `boolean` | Channel ready + `grpc.health.v1` reports `SERVING` |
-| `client.servingStatus(service?)` | `number` | Raw `grpc.health.v1` status; `''` is the whole server |
-| `client.createSnapshot()` | operation metadata | Operator use; requires an elevated key |
-| `client.getRecoveryState()` | index metrics | Operator use; requires an elevated key |
-| `client.setCdcOffset(offset)` | `{ success }` | Operator use; requires an elevated key |
+| `client.health()` | `boolean` | Whether the service is ready to answer queries |
+| `client.servingStatus()` | `number` | Readiness as a status code, when you need more than a boolean |
 | `client.close()` | `void` | Shut down the channel pool |
 
 `SearchResponse`:
@@ -321,14 +318,8 @@ Service: `pulseindex.engine.v1.SearchEngineService`
 | `DeleteEntity` | `DeleteEntityRequest` | `DeleteEntityResponse` |
 | `Search` | `SearchQueryRequest` | `SearchQueryResponse` |
 
-`createSnapshot()`, `getRecoveryState()` and `setCdcOffset()` exist on the client
-for operator tooling and require an elevated key; a normal API key cannot call
-them.
-
-The service also answers the standard `grpc.health.v1.Health` protocol. No API key
-is required for it, and none is sent. It responds for two names: the service's own,
-and `''` — the overall-server name from the health spec. Either is fine; `health()`
-uses `''`.
+`health()` reports whether the service is ready to answer queries. It needs no
+particular scope, so it works with any key.
 
 ## License
 
