@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { FilterOperation, GeoHash, PulseIndex, PulseIndexQueryError, QueryBuilder } from '../src';
+import {
+  DEFAULT_LIMIT,
+  FilterOperation,
+  GeoHash,
+  PulseIndex,
+  PulseIndexQueryError,
+  QueryBuilder,
+} from '../src';
 
 describe('QueryBuilder', () => {
+  // The default used to be 0, which the engine read as "no ceiling" and
+  // answered with every matching id the tenant held. Nobody calling search()
+  // without a limit meant to ask for that.
+  it('carries a page size without being told', () => {
+    expect(new QueryBuilder().toArray().limit).toBe(DEFAULT_LIMIT);
+  });
+
+  // Zero is still expressible, and now means the total with no ids attached.
+  it('keeps zero for callers who only want the count', () => {
+    expect(new QueryBuilder().limit(0).toArray().limit).toBe(0);
+  });
+
   it('compiles an immutable fluent payload', () => {
     const base = new QueryBuilder();
     const built = base

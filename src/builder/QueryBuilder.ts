@@ -24,11 +24,21 @@ interface QueryState {
   ranges: RangePredicate[];
 }
 
+/**
+ * A page, for callers who never say otherwise.
+ *
+ * The default used to be 0, which the engine read as "no ceiling" and answered
+ * with every matching id the tenant held. Nobody meant to ask for that, and
+ * the cost of it landed on the service rather than on the caller who forgot
+ * the limit. Zero is still expressible and now means the total alone.
+ */
+export const DEFAULT_LIMIT = 100;
+
 function emptyState(): QueryState {
   return {
     tenantId: '',
     locationPrefix: '0',
-    limit: 0,
+    limit: DEFAULT_LIMIT,
     offset: 0,
     filters: [],
     ranges: [],
@@ -152,6 +162,10 @@ export class QueryBuilder {
     });
   }
 
+  /**
+   * How many ids to return. Zero asks the engine for the number of matches
+   * and no ids at all, which is the cheap way to count.
+   */
   limit(limit: number): QueryBuilder {
     return this.fork((state) => {
       state.limit = Math.max(0, Math.floor(limit));

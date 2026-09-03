@@ -1,6 +1,6 @@
 export { PulseIndexClient, PulseIndex } from './client/PulseIndexClient';
 export { ConnectionManager, sslEnabled } from './client/ConnectionManager';
-export { QueryBuilder } from './builder/QueryBuilder';
+export { QueryBuilder, DEFAULT_LIMIT } from './builder/QueryBuilder';
 export { GeoHash } from './geo/GeoHash';
 export { encodeEntity, toUint64String } from './client/encodeEntity';
 export {
