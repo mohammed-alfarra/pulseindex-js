@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.0.0
+
+### Breaking: a query returns a page instead of everything
+
+`QueryBuilder` defaulted to a limit of 0, which the engine read as "no
+ceiling" and answered with every matching id the tenant held. Nobody calling
+`search()` without a limit meant to ask for that, and the cost of it landed on
+the service rather than on the caller who never mentioned one.
+
+The default is now `DEFAULT_LIMIT`, a hundred, on the builder and on the plain
+options object alike. If you relied on getting every match back, say so:
+
+```ts
+await client.search(PulseIndex.query().tenant('acme').must('status:active').limit(5000));
+```
+
+A limit above the engine's maximum is refused with the maximum named, rather
+than quietly trimmed — a short page that looks complete is worse than an error.
+
+### Zero now means the count
+
+`limit(0)` no longer means "no ceiling". It asks the engine for the number of
+matches and no ids at all, which is the cheap way to count:
+
+```ts
+const { totalMatches } = await client.search(
+  PulseIndex.query().tenant('acme').must('status:active').limit(0),
+);
+```
+
+Requires an engine that speaks this contract. Against an older engine, a limit
+of 0 still returns every id.
+
 ## 2.0.0
 
 ### Breaking: the operator-only methods are gone
