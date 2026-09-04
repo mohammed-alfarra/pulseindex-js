@@ -291,8 +291,11 @@ describe('PulseIndex client integration', () => {
     const searchRequest = engine.calls.find((call) => call.method === 'search')?.request;
     expect(searchRequest?.tenantId).toBe('acme');
     expect(searchRequest?.limit).toBe(50);
-    const filters = (searchRequest?.filters as Array<{ op: number; attribute: string }>) ?? [];
-    expect(filters[0]).toEqual({ op: FilterOperation.MUST, attribute: 'feature:pool' });
+    const filters =
+      (searchRequest?.filters as Array<{ op: number; attribute: string; group: number }>) ?? [];
+    // group 0 is what a predicate that names no disjunction sends, and it is
+    // the behaviour every query had before groups existed.
+    expect(filters[0]).toEqual({ op: FilterOperation.MUST, attribute: 'feature:pool', group: 0 });
     expect(filters.some((filter) => filter.attribute === 'category:villa')).toBe(true);
     expect(filters.some((filter) => filter.attribute.startsWith('geo:'))).toBe(true);
   });
