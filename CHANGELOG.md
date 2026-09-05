@@ -1,5 +1,53 @@
 # Changelog
 
+## 3.1.0
+
+### A radius no longer merges with your own OR
+
+`withinRadius` turns a circle into one SHOULD filter per covering geohash cell.
+Every SHOULD went into the same disjunction, so a radius sat in the same OR as
+anything else you had asked for:
+
+```ts
+PulseIndex.query().should(['color:red', 'color:blue']).withinRadius(lat, lon, 5)
+```
+
+asked for "within 5 km **or** red **or** blue". It returned a plausible page of
+results and said nothing about it. The cells now form a disjunction of their
+own, and each further radius gets another, so that query means what it reads
+like. Nothing changes for a query that used one or the other but not both.
+
+### Groups: (red or blue) and (small or medium)
+
+`should()` takes a group number. Members of a group are OR'd together and the
+groups are AND'd with each other:
+
+```ts
+PulseIndex.query()
+  .should(['color:red', 'color:blue'], 1)
+  .should(['size:s', 'size:m'], 2);
+```
+
+Left unset it is 0, which is one disjunction — exactly what every existing
+query already does.
+
+### Ordering
+
+`sortAsc(field)`, `sortDesc(field)` and `sortBy(field, descending)`, plus
+`sortBy` on the plain options form:
+
+```ts
+await client.search(PulseIndex.query().must('status:active').sortAsc('price'));
+```
+
+Rows carrying no value for the field sort last in both directions; they still
+count towards `totalMatches`, they simply have nothing to be ordered by.
+
+An ordered search cannot stop as soon as the page is full — the cheapest
+remaining row may be anywhere in the tenant — so it costs more than the same
+filter unordered. `offset + limit` is capped at 100,000 and a request past it
+is refused with the ceiling named.
+
 ## 3.0.0
 
 ### Breaking: a query returns a page instead of everything

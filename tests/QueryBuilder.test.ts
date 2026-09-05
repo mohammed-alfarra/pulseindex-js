@@ -40,9 +40,9 @@ describe('QueryBuilder', () => {
       limit: 25,
       offset: 10,
       filters: [
-        { op: FilterOperation.MUST, attribute: 'feature:pool' },
-        { op: FilterOperation.SHOULD, attribute: 'amenity:parking' },
-        { op: FilterOperation.MUST_NOT, attribute: 'feature:shared' },
+        { op: FilterOperation.MUST, attribute: 'feature:pool', group: 0 },
+        { op: FilterOperation.SHOULD, attribute: 'amenity:parking', group: 0 },
+        { op: FilterOperation.MUST_NOT, attribute: 'feature:shared', group: 0 },
       ],
       ranges: [{ field: 'price', minVal: 100, maxVal: 500 }],
     });
@@ -60,11 +60,13 @@ describe('QueryBuilder', () => {
 
     expect(request.tenantId).toBe('acme_corp');
     expect(request.limit).toBe(50);
+    // Both SHOULD terms land in group 0, which is one disjunction: villa or
+    // apartment.
     expect(request.filters).toEqual([
-      { op: FilterOperation.MUST, attribute: 'features:swimming_pool' },
-      { op: FilterOperation.SHOULD, attribute: 'category:villa' },
-      { op: FilterOperation.SHOULD, attribute: 'category:apartment' },
-      { op: FilterOperation.MUST_NOT, attribute: 'status:sold' },
+      { op: FilterOperation.MUST, attribute: 'features:swimming_pool', group: 0 },
+      { op: FilterOperation.SHOULD, attribute: 'category:villa', group: 0 },
+      { op: FilterOperation.SHOULD, attribute: 'category:apartment', group: 0 },
+      { op: FilterOperation.MUST_NOT, attribute: 'status:sold', group: 0 },
     ]);
     expect(request.ranges).toEqual([{ field: 'price', minVal: 100000, maxVal: 500000 }]);
   });
@@ -73,7 +75,9 @@ describe('QueryBuilder', () => {
     const viaWhere = new QueryBuilder().whereGeoHash('ezs42').toRequest();
     const viaIn = new QueryBuilder().inGeoHash('geo:5:ezs42').toArray();
 
-    expect(viaWhere.filters).toEqual([{ op: FilterOperation.MUST, attribute: 'geo:5:ezs42' }]);
+    expect(viaWhere.filters).toEqual([
+      { op: FilterOperation.MUST, attribute: 'geo:5:ezs42', group: 0 },
+    ]);
     expect(viaIn.filters).toEqual(viaWhere.filters);
   });
 
@@ -90,11 +94,86 @@ describe('QueryBuilder', () => {
     expect(request.filters).toHaveLength(covering.length);
     expect(GeoHash.optimalPrecisionForRadius(radiusKm)).toBe(5);
     expect(request.filters.map((filter) => filter.attribute)).toEqual(covering.map((hash) => GeoHash.tag(hash)));
-    expect(request.filters[0]).toEqual({ op: FilterOperation.SHOULD, attribute: 'geo:5:ezs42' });
+    // Group 1, not 0: the covering cells are one geographic constraint spelled
+    // as "any of these", and they must not merge with a disjunction the caller
+    // wrote themselves.
+    expect(request.filters[0]).toEqual({
+      op: FilterOperation.SHOULD,
+      attribute: 'geo:5:ezs42',
+      group: 1,
+    });
     for (const filter of request.filters) {
       expect(filter.op).toBe(FilterOperation.SHOULD);
+      expect(filter.group).toBe(1);
       expect(filter.attribute).toMatch(/^geo:5:[0-9bcdefghjkmnpqrstuvwxyz]+$/);
     }
+  });
+
+  it('keeps a radius out of the caller\'s own disjunction', () => {
+    const request = PulseIndex.query()
+      .should(['color:red', 'color:blue'])
+      .withinRadius(42.6, -5.6, 4.9)
+      .toRequest();
+
+    const colours = request.filters.filter((f) => f.attribute.startsWith('color:'));
+    const cells = request.filters.filter((f) => f.attribute.startsWith('geo:'));
+
+    expect(colours.every((f) => f.group === 0)).toBe(true);
+    expect(cells.length).toBeGreaterThan(0);
+    expect(cells.every((f) => f.group === 1)).toBe(true);
+  });
+
+  it('gives each radius its own disjunction', () => {
+    const request = PulseIndex.query()
+      .withinRadius(42.6, -5.6, 4.9)
+      .withinRadius(48.85, 2.35, 4.9)
+      .toRequest();
+
+    const groups = new Set(request.filters.map((f) => f.group));
+    expect(groups.size).toBe(2);
+    expect([...groups].sort()).toEqual([1, 2]);
+  });
+
+  it('does not hand a radius a group the caller already named', () => {
+    const request = PulseIndex.query()
+      .should(['a:1', 'a:2'], 3)
+      .withinRadius(42.6, -5.6, 4.9)
+      .toRequest();
+
+    const named = request.filters.filter((f) => f.attribute.startsWith('a:'));
+    const cells = request.filters.filter((f) => f.attribute.startsWith('geo:'));
+    expect(named.every((f) => f.group === 3)).toBe(true);
+    expect(cells.every((f) => f.group === 4)).toBe(true);
+  });
+
+  it('orders a page by a numeric field', () => {
+    expect(PulseIndex.query().sortAsc('price').toRequest().sort).toEqual({
+      field: 'price',
+      descending: false,
+    });
+    expect(PulseIndex.query().sortDesc('price').toRequest().sort).toEqual({
+      field: 'price',
+      descending: true,
+    });
+    // Absent unless asked for: an unordered query is still entity-id order.
+    expect(PulseIndex.query().must('k:a').toRequest().sort).toBeUndefined();
+    expect(() => PulseIndex.query().sortAsc('  ')).toThrow();
+  });
+
+  it('reads groups and ordering from the plain options form', () => {
+    const request = PulseIndex.query()
+      .tenant('acme')
+      .toRequest();
+    expect(request.sort).toBeUndefined();
+
+    const fromOptions = QueryBuilder.fromOptions({
+      tenantId: 'acme',
+      should: ['color:red', 'color:blue'],
+      sortBy: { field: 'price', descending: true },
+    }).toRequest();
+
+    expect(fromOptions.sort).toEqual({ field: 'price', descending: true });
+    expect(fromOptions.filters.every((f) => f.group === 0)).toBe(true);
   });
 
   it('accepts object-form withinRadius with lng', () => {

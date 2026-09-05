@@ -12,6 +12,23 @@ export type EntityId = string | number | bigint;
 export interface FilterPredicate {
   op: FilterOperationCode;
   attribute: string;
+  /**
+   * Which disjunction a SHOULD predicate belongs to. Ignored for MUST and
+   * MUST_NOT.
+   *
+   * Members of a group are OR'd together and the groups are AND'd with each
+   * other, so "(red or blue) and (small or medium)" is two groups. Predicates
+   * that leave this unset share group 0.
+   */
+  group?: number;
+}
+
+/** Orders a page by a numeric field. */
+export interface SortSpec {
+  /** Numeric field name, the same one a range would name. */
+  field: string;
+  /** Largest first when true; smallest first otherwise. */
+  descending: boolean;
 }
 
 export interface RangePredicate {
@@ -27,6 +44,8 @@ export interface SearchQueryRequest {
   limit: number;
   offset: number;
   tenantId: string;
+  /** Absent returns matches in entity-id order. */
+  sort?: SortSpec;
 }
 
 export interface SearchResponse {
@@ -83,6 +102,13 @@ export interface SearchRequestOptions {
   offset?: number;
   withinRadius?: RadiusOptions;
   geoHash?: string;
+  /**
+   * Order the page by a numeric field. `descending` defaults to false.
+   *
+   * Rows carrying no value for the field sort last in both directions. They
+   * still count towards `totalMatches`; they have nothing to be ordered by.
+   */
+  sortBy?: { field: string; descending?: boolean };
 }
 
 export interface EntityAttributes {

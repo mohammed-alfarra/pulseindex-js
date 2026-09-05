@@ -28,6 +28,7 @@ export type {
   SearchQueryRequest,
   SearchRequestOptions,
   SearchResponse,
+  SortSpec,
 } from './types';
 
 import { PulseIndex } from './client/PulseIndexClient';

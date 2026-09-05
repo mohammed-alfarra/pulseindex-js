@@ -9,6 +9,7 @@ import {
   type SearchQueryRequest,
   type SearchRequestOptions,
   type SearchResponse,
+  type SortSpec,
 } from '../types';
 
 export interface QueryExecutor {
@@ -22,6 +23,16 @@ interface QueryState {
   offset: number;
   filters: FilterPredicate[];
   ranges: RangePredicate[];
+  sort: SortSpec | null;
+  /**
+   * The next disjunction number to hand out.
+   *
+   * Group 0 is the default and belongs to plain `should()` calls. Anything
+   * that builds a disjunction of its own — a radius, which becomes one SHOULD
+   * per covering geohash — takes a number from here so it cannot merge with a
+   * disjunction the caller wrote.
+   */
+  nextGroup: number;
 }
 
 /**
@@ -42,6 +53,8 @@ function emptyState(): QueryState {
     offset: 0,
     filters: [],
     ranges: [],
+    sort: null,
+    nextGroup: 1,
   };
 }
 
@@ -87,8 +100,18 @@ export class QueryBuilder {
     return this.addFilters(FilterOperation.MUST, attribute);
   }
 
-  should(attribute: string | string[]): QueryBuilder {
-    return this.addFilters(FilterOperation.SHOULD, attribute);
+  /**
+   * At least one of these has to match.
+   *
+   * Pass a `group` to keep a disjunction separate from another one. Members of
+   * a group are OR'd together and the groups are AND'd with each other, so
+   * `.should(['color:red', 'color:blue'], 1).should(['size:s', 'size:m'], 2)`
+   * asks for a red or blue shirt in small or medium. Without the group numbers
+   * all four collapse into a single OR, which answers a different question and
+   * says nothing about it.
+   */
+  should(attribute: string | string[], group = 0): QueryBuilder {
+    return this.addFilters(FilterOperation.SHOULD, attribute, group);
   }
 
   mustNot(attribute: string | string[]): QueryBuilder {
@@ -133,10 +156,18 @@ export class QueryBuilder {
 
     const covering = GeoHash.getCoveringHashes(lat, longitude, radius, resolvedPrecision);
     return this.fork((state) => {
+      // A disjunction of its own. These are one geographic constraint spelled
+      // as "any of these cells", and before groups existed they went into the
+      // same OR as everything else the caller had asked for with `should()` —
+      // so "within 5 km and (red or blue)" was answered as "within 5 km or red
+      // or blue", quietly, with a plausible-looking page of results.
+      const group = state.nextGroup;
+      state.nextGroup += 1;
       for (const hash of covering) {
         state.filters.push({
           op: FilterOperation.SHOULD,
           attribute: GeoHash.tag(hash),
+          group,
         });
       }
     });
@@ -178,8 +209,38 @@ export class QueryBuilder {
     });
   }
 
+  /**
+   * Order the page by a numeric field, smallest first.
+   *
+   * An ordered search cannot stop as soon as the page is full — the cheapest
+   * remaining row may be anywhere in the tenant — so it costs more than the
+   * same filter unordered. `offset + limit` is capped at 100,000.
+   */
+  sortAsc(field: string): QueryBuilder {
+    return this.sortBy(field, false);
+  }
+
+  /** Order the page by a numeric field, largest first. */
+  sortDesc(field: string): QueryBuilder {
+    return this.sortBy(field, true);
+  }
+
+  /**
+   * Order the page by a numeric field. Rows carrying no value for it sort last
+   * in both directions; they still count towards `totalMatches`, they simply
+   * have nothing to be ordered by.
+   */
+  sortBy(field: string, descending = false): QueryBuilder {
+    if (!field.trim()) {
+      throw new PulseIndexQueryError('Sort field must not be empty.');
+    }
+    return this.fork((state) => {
+      state.sort = { field, descending };
+    });
+  }
+
   toRequest(defaultTenantId = ''): SearchQueryRequest {
-    return {
+    const request: SearchQueryRequest = {
       tenantId: this.state.tenantId || defaultTenantId,
       locationPrefix: this.state.locationPrefix,
       limit: this.state.limit,
@@ -187,6 +248,10 @@ export class QueryBuilder {
       filters: this.state.filters.map((filter) => ({ ...filter })),
       ranges: this.state.ranges.map((range) => ({ ...range })),
     };
+    if (this.state.sort) {
+      request.sort = { ...this.state.sort };
+    }
+    return request;
   }
 
   toArray(defaultTenantId = ''): SearchQueryRequest {
@@ -240,15 +305,28 @@ export class QueryBuilder {
     if (options.offset !== undefined) {
       query = query.offset(options.offset);
     }
+    if (options.sortBy !== undefined) {
+      query = query.sortBy(options.sortBy.field, options.sortBy.descending ?? false);
+    }
 
     return query;
   }
 
-  private addFilters(op: FilterOperationCode, attribute: string | string[]): QueryBuilder {
+  private addFilters(
+    op: FilterOperationCode,
+    attribute: string | string[],
+    group = 0,
+  ): QueryBuilder {
     const attributes = asAttributeList(attribute);
+    const normalizedGroup = Math.max(0, Math.floor(group));
     return this.fork((state) => {
       for (const value of attributes) {
-        state.filters.push({ op, attribute: value });
+        state.filters.push({ op, attribute: value, group: normalizedGroup });
+      }
+      // A caller naming their own group must not have it handed out again to a
+      // radius later in the same chain.
+      if (normalizedGroup >= state.nextGroup) {
+        state.nextGroup = normalizedGroup + 1;
       }
     });
   }
@@ -262,6 +340,8 @@ export class QueryBuilder {
       offset: this.state.offset,
       filters: this.state.filters.map((filter) => ({ ...filter })),
       ranges: this.state.ranges.map((range) => ({ ...range })),
+      sort: this.state.sort ? { ...this.state.sort } : null,
+      nextGroup: this.state.nextGroup,
     };
     mutate(next.state);
     return next;
