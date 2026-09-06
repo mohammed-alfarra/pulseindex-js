@@ -109,11 +109,44 @@ export function diffProtoSchemas(expected, actual) {
  *                                      the service does not implement.
  * Present in both but different     -> error, in either direction.
  */
+/**
+ * The RPCs the published copy leaves out on purpose, and the messages that go
+ * with them. No customer key can call these, so shipping them would advertise
+ * a door nobody can open.
+ *
+ * Named here rather than tolerated silently. The check used to accept ANY
+ * omission, so it could not tell one of these from an RPC somebody forgot to
+ * vendor: removing BatchDeleteEntities from this copy left the guard green.
+ * Adding an operator RPC to the engine now has to be a deliberate line here.
+ */
+export const DELIBERATELY_OMITTED_RPCS = ['CreateSnapshot', 'GetRecoveryState', 'SetCdcOffset'];
+
+export const DELIBERATELY_OMITTED_MESSAGES = [
+  'CreateSnapshotRequest', 'CreateSnapshotResponse',
+  'GetRecoveryStateRequest', 'GetRecoveryStateResponse',
+  'SetCdcOffsetRequest', 'SetCdcOffsetResponse',
+];
+
+const rpcName = (rpc) => String(rpc).split('(')[0].trim();
+
 export function diffProtoSubset(engine, vendored) {
   /** @type {string[]} */ const out = [];
 
   for (const rpc of vendored.rpcs) {
     if (!engine.rpcs.includes(rpc)) out.push(`+ rpc not in the engine: ${rpc}`);
+  }
+
+  // The other direction, which is the one that was missing.
+  for (const rpc of engine.rpcs) {
+    if (vendored.rpcs.includes(rpc)) continue;
+    if (DELIBERATELY_OMITTED_RPCS.includes(rpcName(rpc))) continue;
+    out.push(`- rpc missing from the vendored copy: ${rpc}`);
+  }
+
+  for (const name of Object.keys(engine.messages).sort()) {
+    if (vendored.messages[name]) continue;
+    if (DELIBERATELY_OMITTED_MESSAGES.includes(name)) continue;
+    out.push(`- message missing from the vendored copy: ${name}`);
   }
 
   for (const name of Object.keys(vendored.messages).sort()) {

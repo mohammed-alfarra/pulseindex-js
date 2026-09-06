@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseProtoSchema, type ProtoSchema } from '../scripts/protoSchema.mjs';
+import { diffProtoSubset, parseProtoSchema, type ProtoSchema } from '../scripts/protoSchema.mjs';
 
 /**
  * Guard against silent proto drift.
@@ -72,6 +72,53 @@ const EXPECTED: ProtoSchema = {
     'FilterPredicate.Operation': ['MUST=0', 'SHOULD=1', 'MUST_NOT=2'],
   },
 };
+
+// The guard has to tell a deliberate trim from a forgotten one. diffProtoSubset
+// only ever walked the vendored declarations, so anything the engine had and
+// the copy lacked passed silently. Verified before this: deleting
+// BatchDeleteEntities from the vendored proto left `npm run check:proto` green.
+describe('engine-to-vendored omissions', () => {
+  const engine = parseProtoSchema(`
+    service SearchEngineService {
+      rpc Search (SearchQueryRequest) returns (SearchQueryResponse);
+      rpc BatchDeleteEntities (BatchDeleteEntitiesRequest) returns (BatchDeleteEntitiesResponse);
+      rpc GetRecoveryState (GetRecoveryStateRequest) returns (GetRecoveryStateResponse);
+    }
+    message SearchQueryRequest { uint32 limit = 1; }
+    message SearchQueryResponse { uint32 total_matches = 1; }
+    message BatchDeleteEntitiesRequest { repeated uint64 entity_ids = 1; }
+    message BatchDeleteEntitiesResponse { uint32 deleted_count = 1; }
+    message GetRecoveryStateRequest { }
+    message GetRecoveryStateResponse { uint64 indexed_count = 2; }
+  `);
+
+  const withoutOperatorRpcs = `
+    service SearchEngineService {
+      rpc Search (SearchQueryRequest) returns (SearchQueryResponse);
+      rpc BatchDeleteEntities (BatchDeleteEntitiesRequest) returns (BatchDeleteEntitiesResponse);
+    }
+    message SearchQueryRequest { uint32 limit = 1; }
+    message SearchQueryResponse { uint32 total_matches = 1; }
+    message BatchDeleteEntitiesRequest { repeated uint64 entity_ids = 1; }
+    message BatchDeleteEntitiesResponse { uint32 deleted_count = 1; }
+  `;
+
+  it('reports a customer RPC missing from the vendored copy', () => {
+    const vendored = parseProtoSchema(`
+      service SearchEngineService {
+        rpc Search (SearchQueryRequest) returns (SearchQueryResponse);
+      }
+      message SearchQueryRequest { uint32 limit = 1; }
+      message SearchQueryResponse { uint32 total_matches = 1; }
+    `);
+    const diff = diffProtoSubset(engine, vendored);
+    expect(diff.join('\n')).toContain('BatchDeleteEntities');
+  });
+
+  it('accepts the operator RPCs being left out, and only those', () => {
+    expect(diffProtoSubset(engine, parseProtoSchema(withoutOperatorRpcs))).toEqual([]);
+  });
+});
 
 describe('vendored engine.proto schema', () => {
   const actual = parseProtoSchema(readFileSync(PROTO_PATH, 'utf8'));
