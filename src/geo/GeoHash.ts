@@ -6,7 +6,19 @@ export class GeoHash {
 
   private static readonly BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
   private static readonly EARTH_RADIUS_KM = 6371.0;
-  private static readonly MAX_COVERING_CELLS = 64;
+  /**
+   * Most cells one radius query may expand into, and therefore the most SHOULD
+   * predicates it sends.
+   *
+   * This used to be 64 and it was a truncation limit: the walk stopped mid
+   * covering and returned what it had, so a 50 km search covered 18% of its own
+   * circle and said nothing. It is now a budget the precision is chosen to fit,
+   * so a covering is always complete or the request is refused.
+   *
+   * 512 against the engine's 4,096-filter ceiling. Supports radii to about
+   * 60 km at the coarsest indexed precision; past that the request is refused.
+   */
+  static readonly COVERING_CELL_BUDGET = 512;
 
   private static readonly NEIGHBORS: Record<'n' | 's' | 'e' | 'w', [string, string]> = {
     n: ['p0r21436x8zb9dcf5h7kjnmqesgutwvy', 'bc01fg45238967deuvhjyznpkmstqrwx'],
@@ -156,23 +168,68 @@ export class GeoHash {
     return this.neighborhood3x3(this.encode(lat, lon, precision)).map((cell) => this.tag(cell));
   }
 
-  static optimalPrecisionForRadius(radiusKm: number): number {
+  /**
+   * The precision a radius query should cover at, at this point on the globe.
+   *
+   * Only ever one of {@link INDEX_PRECISIONS}. That is the correction: this
+   * used to return 4 for anything over 8 km, and nothing is indexed at
+   * precision 4, so **every radius above 8 km matched nothing at all**.
+   * Measured against a real engine with entities tagged by `encodeMultiTags`:
+   * 15 km returned 0 of 386, 50 km returned 0 of 4,282 — an empty page, with
+   * no error to explain it.
+   *
+   * Of the indexed precisions it returns the finest whose complete covering
+   * fits {@link COVERING_CELL_BUDGET}, because a finer cell wastes less area
+   * outside the circle. Measured at Riyadh: 5 km takes 140 cells at precision
+   * 6 for 1.21x the circle, against 10 cells at precision 5 for 2.76x; 15 km
+   * needs 1,120 at precision 6 and so falls to 47 at precision 5 for 1.44x.
+   *
+   * Latitude is a parameter because it changes the answer: a cell keeps its
+   * width in degrees, so it narrows in kilometres toward the poles and the same
+   * radius needs more of them.
+   *
+   * @throws when no indexed precision can cover the radius within the budget —
+   *         refused rather than half-covered.
+   */
+  static optimalPrecisionForRadius(radiusKm: number, lat = 0, lon = 0): number {
     if (radiusKm < 0) {
       throw new Error('Radius must be non-negative.');
     }
-    if (radiusKm <= 1.5) {
-      return 6;
+
+    const budget = this.COVERING_CELL_BUDGET;
+    // Finest first: a smaller cell wastes less area outside the circle.
+    for (const precision of [...this.INDEX_PRECISIONS].sort((a, b) => b - a)) {
+      // One past the budget is enough to know it does not fit, and stops a
+      // 100 km radius walking sixteen hundred cells to find out.
+      if (this.walkCovering(lat, lon, radiusKm, precision, budget + 1).length <= budget) {
+        return precision;
+      }
     }
-    if (radiusKm <= 8.0) {
-      return 5;
-    }
-    return 4;
+
+    throw new Error(
+      `A ${radiusKm} km radius needs more than ${budget} geohash cells at every indexed ` +
+        `precision (${this.INDEX_PRECISIONS.join(', ')}). Use a smaller radius, or index a ` +
+        'coarser precision.',
+    );
   }
 
-  static precisionForRadius(radiusKm: number): number {
-    return this.optimalPrecisionForRadius(radiusKm);
+  static precisionForRadius(radiusKm: number, lat = 0, lon = 0): number {
+    return this.optimalPrecisionForRadius(radiusKm, lat, lon);
   }
 
+  /**
+   * GeoHashes whose cells cover the search circle.
+   *
+   * The covering is always complete. It used to stop at 64 cells and return
+   * what it had, so a caller asking for 50 km got cells covering 18% of that
+   * circle — with no error. Now the precision is chosen to fit the budget and
+   * the walk always finishes, so the result either covers the circle or the
+   * call refuses.
+   *
+   * Passing `precision` explicitly overrides the choice, and is checked against
+   * {@link INDEX_PRECISIONS}: entities carry tags only at those, so any other
+   * precision matches nothing at all rather than matching loosely.
+   */
   static getCoveringHashes(
     lat: number,
     lon: number,
@@ -183,13 +240,41 @@ export class GeoHash {
       throw new Error('Radius must be non-negative.');
     }
 
-    const resolvedPrecision = precision ?? this.optimalPrecisionForRadius(radiusKm);
-    this.assertPrecision(resolvedPrecision);
+    let resolved: number;
+    if (precision === undefined) {
+      resolved = this.optimalPrecisionForRadius(radiusKm, lat, lon);
+    } else {
+      this.assertPrecision(precision);
+      if (!(this.INDEX_PRECISIONS as readonly number[]).includes(precision)) {
+        throw new Error(
+          `Precision ${precision} is not indexed, so a covering at it matches nothing. ` +
+            `Indexed precisions: ${this.INDEX_PRECISIONS.join(', ')}.`,
+        );
+      }
+      resolved = precision;
+    }
 
-    const center = this.encode(lat, lon, resolvedPrecision);
+    return this.walkCovering(lat, lon, radiusKm, resolved, null);
+  }
+
+  /**
+   * Every cell at `precision` that intersects the circle, breadth-first from
+   * the centre and expanding only through cells that intersect.
+   *
+   * `limit` exists only so the precision chooser can stop early once a
+   * precision is known not to fit; a null limit walks to completion, which is
+   * what every caller that wants an answer passes.
+   */
+  private static walkCovering(
+    lat: number,
+    lon: number,
+    radiusKm: number,
+    precision: number,
+    limit: number | null,
+  ): string[] {
     const covering: string[] = [];
     const visited = new Set<string>();
-    const queue: string[] = [center];
+    const queue: string[] = [this.encode(lat, lon, precision)];
 
     while (queue.length > 0) {
       const current = queue.shift();
@@ -203,8 +288,8 @@ export class GeoHash {
       }
 
       covering.push(current);
-      if (covering.length >= this.MAX_COVERING_CELLS) {
-        break;
+      if (limit !== null && covering.length >= limit) {
+        return covering;
       }
 
       for (const neighbor of this.neighbors(current)) {

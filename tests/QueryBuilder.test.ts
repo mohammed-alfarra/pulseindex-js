@@ -92,20 +92,22 @@ describe('QueryBuilder', () => {
 
     expect(base.toArray().filters).toEqual([]);
     expect(request.filters).toHaveLength(covering.length);
-    expect(GeoHash.optimalPrecisionForRadius(radiusKm)).toBe(5);
+    // 6, not 5: a 4.9 km circle fits inside the fine precision's cell budget,
+    // and a finer cell wastes less area outside the circle.
+    expect(GeoHash.optimalPrecisionForRadius(radiusKm, lat, lon)).toBe(6);
     expect(request.filters.map((filter) => filter.attribute)).toEqual(covering.map((hash) => GeoHash.tag(hash)));
     // Group 1, not 0: the covering cells are one geographic constraint spelled
     // as "any of these", and they must not merge with a disjunction the caller
     // wrote themselves.
     expect(request.filters[0]).toEqual({
       op: FilterOperation.SHOULD,
-      attribute: 'geo:5:ezs42',
+      attribute: 'geo:6:ezs42e',
       group: 1,
     });
     for (const filter of request.filters) {
       expect(filter.op).toBe(FilterOperation.SHOULD);
       expect(filter.group).toBe(1);
-      expect(filter.attribute).toMatch(/^geo:5:[0-9bcdefghjkmnpqrstuvwxyz]+$/);
+      expect(filter.attribute).toMatch(/^geo:6:[0-9bcdefghjkmnpqrstuvwxyz]+$/);
     }
   });
 

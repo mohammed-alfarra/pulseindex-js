@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { GeoHash } from '../src';
 
@@ -50,25 +53,115 @@ describe('GeoHash', () => {
     expect(GeoHash.neighborhoodTags(42.6, -5.6, 5)[0]).toBe('geo:5:ezs42');
   });
 
-  it('maps radius to dynamic precision', () => {
-    expect(GeoHash.optimalPrecisionForRadius(0.0)).toBe(6);
-    expect(GeoHash.optimalPrecisionForRadius(1.0)).toBe(6);
-    expect(GeoHash.optimalPrecisionForRadius(1.5)).toBe(6);
-    expect(GeoHash.optimalPrecisionForRadius(1.51)).toBe(5);
-    expect(GeoHash.optimalPrecisionForRadius(4.9)).toBe(5);
-    expect(GeoHash.optimalPrecisionForRadius(8.0)).toBe(5);
-    expect(GeoHash.optimalPrecisionForRadius(8.01)).toBe(4);
-    expect(GeoHash.optimalPrecisionForRadius(40.0)).toBe(4);
-    expect(GeoHash.precisionForRadius(4.9)).toBe(GeoHash.optimalPrecisionForRadius(4.9));
+  // This used to return 4 above 8 km, and nothing is indexed at 4, so every
+  // radius over 8 km matched nothing whatsoever. Measured against a real engine
+  // with entities tagged by encodeMultiTags: 15 km returned 0 of 386, 50 km
+  // returned 0 of 4,282 — an empty page, with no error to explain it.
+  it('only ever picks a precision the index carries', () => {
+    for (const radius of [0, 0.5, 1, 1.5, 2, 5, 8, 8.01, 10, 15, 25, 40, 50]) {
+      expect(GeoHash.INDEX_PRECISIONS as readonly number[]).toContain(
+        GeoHash.optimalPrecisionForRadius(radius, 24.7136, 46.6753),
+      );
+    }
+  });
+
+  it('prefers the finer precision while it fits the budget', () => {
+    const [lat, lon] = [24.7136, 46.6753];
+    expect(GeoHash.optimalPrecisionForRadius(0.5, lat, lon)).toBe(6);
+    expect(GeoHash.optimalPrecisionForRadius(5.0, lat, lon)).toBe(6);
+    expect(GeoHash.optimalPrecisionForRadius(15.0, lat, lon)).toBe(5);
+    expect(GeoHash.optimalPrecisionForRadius(50.0, lat, lon)).toBe(5);
+    expect(GeoHash.precisionForRadius(4.9, lat, lon)).toBe(
+      GeoHash.optimalPrecisionForRadius(4.9, lat, lon),
+    );
+  });
+
+  // The old cap stopped the walk at 64 cells and returned them, so a 50 km
+  // search came back covering 18% of its own circle and said nothing.
+  it('refuses a radius too large to cover rather than half-covering it', () => {
+    expect(() => GeoHash.optimalPrecisionForRadius(400, 24.7136, 46.6753)).toThrow(
+      /needs more than \d+ geohash cells/,
+    );
+  });
+
+  it('refuses a precision nothing is indexed at', () => {
+    expect(() => GeoHash.getCoveringHashes(24.7136, 46.6753, 15, 4)).toThrow(/is not indexed/);
+  });
+
+  // Sixteen bearings around the rim, every one inside a returned cell. This is
+  // the assertion a truncated covering fails.
+  it('returns a covering that contains the whole circle', () => {
+    const destination = (lat: number, lon: number, km: number, bearing: number) => {
+      const R = 6371, d = km / R, b = (bearing * Math.PI) / 180;
+      const la = (lat * Math.PI) / 180, lo = (lon * Math.PI) / 180;
+      const la2 = Math.asin(Math.sin(la) * Math.cos(d) + Math.cos(la) * Math.sin(d) * Math.cos(b));
+      const lo2 = lo + Math.atan2(
+        Math.sin(b) * Math.sin(d) * Math.cos(la),
+        Math.cos(d) - Math.sin(la) * Math.sin(la2),
+      );
+      return [(la2 * 180) / Math.PI, (lo2 * 180) / Math.PI] as const;
+    };
+
+    for (const [lat, lon] of [[24.7136, 46.6753], [51.5074, -0.1278], [-33.8688, 151.2093]]) {
+      for (const radius of [0.5, 2, 5, 15, 40]) {
+        const bounds = GeoHash.getCoveringHashes(lat, lon, radius).map((h) =>
+          GeoHash.decodeBounds(h),
+        );
+        for (let bearing = 0; bearing < 360; bearing += 22.5) {
+          const [plat, plon] = destination(lat, lon, radius * 0.999, bearing);
+          const inside = bounds.some(
+            (b) => plat >= b.latMin && plat <= b.latMax && plon >= b.lonMin && plon <= b.lonMax,
+          );
+          expect(inside, `${radius}km rim at ${bearing}deg from ${lat},${lon}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  // Cells are rectangles and the query is a circle, so some excess is
+  // unavoidable. 6x is not: 2 km measured 5.43x the true count before this.
+  // The same vectors the PHP SDK asserts against. Two implementations of one
+  // contract, and nothing checked they agreed: a customer moving between the
+  // SDKs would have got different result sets for the same call.
+  it('matches the shared covering vectors', async () => {
+    const vectors = JSON.parse(
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'geo-covering-vectors.json'), 'utf8'),
+    ) as Array<{
+      name: string; lat: number; lon: number; radiusKm: number;
+      precision: number; count: number; first: string; last: string;
+    }>;
+    expect(vectors.length).toBeGreaterThan(0);
+
+    for (const v of vectors) {
+      const cells = GeoHash.getCoveringHashes(v.lat, v.lon, v.radiusKm);
+      const label = `${v.name} at ${v.radiusKm} km`;
+      expect(cells, label).toHaveLength(v.count);
+      expect(cells[0].length, label).toBe(v.precision);
+      expect(cells[0], label).toBe(v.first);
+      expect(cells[cells.length - 1], label).toBe(v.last);
+    }
+  });
+
+  it('keeps the covered area close to the circle', () => {
+    const [lat, lon] = [24.7136, 46.6753];
+    for (const radius of [0.5, 2, 5, 10, 15, 25, 50]) {
+      const covered = GeoHash.getCoveringHashes(lat, lon, radius).reduce((sum, h) => {
+        const b = GeoHash.decodeBounds(h);
+        const rad = (d: number) => (d * Math.PI) / 180;
+        return sum + 6371 * rad(b.latMax - b.latMin)
+          * 6371 * Math.cos(rad((b.latMax + b.latMin) / 2)) * rad(b.lonMax - b.lonMin);
+      }, 0);
+      expect(covered / (Math.PI * radius ** 2), `${radius}km`).toBeLessThan(2.0);
+    }
   });
 
   it('covers a radius with the centre cell first', () => {
     const hashes = GeoHash.getCoveringHashes(42.6, -5.6, 4.9);
-    expect(hashes[0]).toBe('ezs42');
+    expect(hashes[0]).toBe('ezs42e');
     expect(hashes.length).toBeGreaterThanOrEqual(1);
     expect(hashes).toEqual([...new Set(hashes)]);
     for (const hash of hashes) {
-      expect(hash).toHaveLength(5);
+      expect(hash).toHaveLength(6);
     }
   });
 
