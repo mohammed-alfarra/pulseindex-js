@@ -65,15 +65,54 @@ describe('GeoHash', () => {
     }
   });
 
-  it('prefers the finer precision while it fits the budget', () => {
+  it('uses the coarser cell whenever it is accurate enough', () => {
     const [lat, lon] = [24.7136, 46.6753];
+    // Small circles need the fine cell: the coarse one wastes 6.91x the area
+    // at 2 km and 2.76x at 5 km, well past what is acceptable.
     expect(GeoHash.optimalPrecisionForRadius(0.5, lat, lon)).toBe(6);
     expect(GeoHash.optimalPrecisionForRadius(5.0, lat, lon)).toBe(6);
+    // Large ones do not. At 15 km the coarse cell is already within 1.44x, and
+    // the fine one would cost 1,120 cells instead of 47 to reach 1.07x.
     expect(GeoHash.optimalPrecisionForRadius(15.0, lat, lon)).toBe(5);
     expect(GeoHash.optimalPrecisionForRadius(50.0, lat, lon)).toBe(5);
+    expect(GeoHash.getCoveringHashes(lat, lon, 15).length).toBeLessThan(200);
     expect(GeoHash.precisionForRadius(4.9, lat, lon)).toBe(
       GeoHash.optimalPrecisionForRadius(4.9, lat, lon),
     );
+  });
+
+  // A plain clamp is wrong at the antimeridian because -180 and +180 are the
+  // same meridian. Measured before this: a query at lon 179.99 against the cell
+  // spanning -180 to -179.989 clamped to the far edge and measured 2.334 km,
+  // when the true nearest point is -180.0 at 1.112 km.
+  it('does not drop a cell across the antimeridian', () => {
+    const cells = GeoHash.getCoveringHashes(0.0, 179.99, 2.0);
+    expect(cells.some((h) => GeoHash.decodeBounds(h).lonMin < 0)).toBe(true);
+    expect(cells).toContain('800000');
+  });
+
+  it('finds the same covering from either side of the line', () => {
+    // 179.999 and -179.999 are 222 metres apart.
+    const east = GeoHash.getCoveringHashes(0.0, 179.999, 5.0);
+    const west = new Set(GeoHash.getCoveringHashes(0.0, -179.999, 5.0));
+    const shared = east.filter((h) => west.has(h)).length;
+    expect(shared).toBeGreaterThan(east.length * 0.8);
+  });
+
+  // Cells narrow toward the poles, so the same radius costs more of them the
+  // further north it is asked. The refusal has to say so.
+  it('names the latitude when it refuses', () => {
+    expect(() => GeoHash.getCoveringHashes(89.9, 0, 50)).toThrow(/latitude 89\.9/);
+  });
+
+  // The budget was first set at one latitude and refused a 50 km search
+  // anywhere above 60 degrees — Oslo, Stockholm, Helsinki, Saint Petersburg.
+  it('covers 50 km where Europeans live', () => {
+    for (const [lat, lon] of [[59.9139, 10.7522], [59.3293, 18.0686], [60.1699, 24.9384], [69.6492, 18.9553]]) {
+      const cells = GeoHash.getCoveringHashes(lat, lon, 50);
+      expect(cells.length).toBeGreaterThan(0);
+      expect(cells.length).toBeLessThanOrEqual(GeoHash.COVERING_CELL_BUDGET);
+    }
   });
 
   // The old cap stopped the walk at 64 cells and returned them, so a 50 km
@@ -102,16 +141,31 @@ describe('GeoHash', () => {
       return [(la2 * 180) / Math.PI, (lo2 * 180) / Math.PI] as const;
     };
 
-    for (const [lat, lon] of [[24.7136, 46.6753], [51.5074, -0.1278], [-33.8688, 151.2093]]) {
+    const places: Array<[number, number]> = [
+      [24.7136, 46.6753],     // Riyadh
+      [51.5074, -0.1278],     // London, across the prime meridian
+      [-33.8688, 151.2093],   // Sydney
+      [0.0, 179.99],          // hard against the antimeridian, east side
+      [0.0, -179.99],         // and the west side
+      [-16.5, 179.9],         // Fiji, a real place that sits on it
+      [71.0, 25.8],           // North Cape, where cells are narrow
+    ];
+    for (const [lat, lon] of places) {
       for (const radius of [0.5, 2, 5, 15, 40]) {
         const bounds = GeoHash.getCoveringHashes(lat, lon, radius).map((h) =>
           GeoHash.decodeBounds(h),
         );
         for (let bearing = 0; bearing < 360; bearing += 22.5) {
           const [plat, plon] = destination(lat, lon, radius * 0.999, bearing);
-          const inside = bounds.some(
-            (b) => plat >= b.latMin && plat <= b.latMax && plon >= b.lonMin && plon <= b.lonMax,
-          );
+          // Longitude compared in a frame anchored at the cell's west edge, so
+          // the +/-180 seam is not a discontinuity. Comparing raw degrees made
+          // this assertion lie at the antimeridian in both directions.
+          const inside = bounds.some((b) => {
+            if (plat < b.latMin || plat > b.latMax) return false;
+            const span = b.lonMax - b.lonMin;
+            const off = ((((plon - b.lonMin) + 180) % 360) + 360) % 360 - 180;
+            return off >= -1e-9 && off <= span + 1e-9;
+          });
           expect(inside, `${radius}km rim at ${bearing}deg from ${lat},${lon}`).toBe(true);
         }
       }

@@ -15,10 +15,27 @@ export class GeoHash {
    * circle and said nothing. It is now a budget the precision is chosen to fit,
    * so a covering is always complete or the request is refused.
    *
-   * 512 against the engine's 4,096-filter ceiling. Supports radii to about
-   * 60 km at the coarsest indexed precision; past that the request is refused.
+   * The number is set by latitude, not by radius. Cells needed at the coarsest
+   * indexed precision, measured: 50 km costs 376 at the equator, 592 at London,
+   * 720 at Oslo, 1,044 at Tromso, 2,028 at 80N. A first attempt used 512,
+   * chosen at one latitude, and it refused a 50 km search anywhere above 60
+   * degrees — Oslo, Stockholm, Helsinki, Saint Petersburg.
+   *
+   * The cost is bounded: measured against a live engine, a covering costs about
+   * 0.57 us per cell, so a query at the full budget spends roughly 1.2 ms in
+   * the engine, and stays half of its 4,096-filter ceiling.
    */
-  static readonly COVERING_CELL_BUDGET = 512;
+  static readonly COVERING_CELL_BUDGET = 2048;
+
+  /**
+   * How much area outside the circle a covering may carry before a finer
+   * precision is worth its cell count.
+   *
+   * 2.0 is where the measured choices come out right at every radius: it
+   * rejects the coarse cell at 2 km (6.91x) and 5 km (2.76x) and accepts it at
+   * 15 km (1.44x), which is also where the cell count turns from 47 into 1,120.
+   */
+  static readonly ACCEPTABLE_COVER_RATIO = 2.0;
 
   private static readonly NEIGHBORS: Record<'n' | 's' | 'e' | 'w', [string, string]> = {
     n: ['p0r21436x8zb9dcf5h7kjnmqesgutwvy', 'bc01fg45238967deuvhjyznpkmstqrwx'],
@@ -197,19 +214,37 @@ export class GeoHash {
     }
 
     const budget = this.COVERING_CELL_BUDGET;
-    // Finest first: a smaller cell wastes less area outside the circle.
-    for (const precision of [...this.INDEX_PRECISIONS].sort((a, b) => b - a)) {
+    let fallback: number | null = null;
+
+    // Coarsest first, stopping at the first precision that is accurate enough.
+    // Taking the finest that merely fits was the earlier rule and it was wrong:
+    // at 15 km that is 1,120 cells for 1.07x the circle where the coarser cell
+    // costs 47 for 1.44x — 24 times the predicates to shave a quarter off an
+    // excess that is already small.
+    for (const precision of [...this.INDEX_PRECISIONS].sort((a, b) => a - b)) {
       // One past the budget is enough to know it does not fit, and stops a
-      // 100 km radius walking sixteen hundred cells to find out.
-      if (this.walkCovering(lat, lon, radiusKm, precision, budget + 1).length <= budget) {
+      // 100 km radius walking six thousand cells to find out.
+      const cells = this.walkCovering(lat, lon, radiusKm, precision, budget + 1);
+      if (cells.length > budget) {
+        continue;
+      }
+      if (radiusKm > 0 && this.coveredRatio(cells, radiusKm) <= this.ACCEPTABLE_COVER_RATIO) {
         return precision;
       }
+      fallback = precision;
+    }
+
+    // Nothing hit the target; the finest that fits is the tightest on offer.
+    if (fallback !== null) {
+      return fallback;
     }
 
     throw new Error(
-      `A ${radiusKm} km radius needs more than ${budget} geohash cells at every indexed ` +
-        `precision (${this.INDEX_PRECISIONS.join(', ')}). Use a smaller radius, or index a ` +
-        'coarser precision.',
+      `A ${radiusKm} km radius at latitude ${lat.toFixed(1)} needs more than ${budget} geohash ` +
+        `cells at every indexed precision (${this.INDEX_PRECISIONS.join(', ')}). Geohash cells ` +
+        'narrow toward the poles, so the same radius costs more cells the further from the ' +
+        'equator it is asked. Use a smaller radius, move the search nearer the equator, or ' +
+        'index a coarser precision.',
     );
   }
 
@@ -332,8 +367,58 @@ export class GeoHash {
   ): boolean {
     const bounds = this.decodeBounds(hash);
     const closestLat = Math.min(Math.max(lat, bounds.latMin), bounds.latMax);
-    const closestLon = Math.min(Math.max(lon, bounds.lonMin), bounds.lonMax);
+    const closestLon = this.closestLongitude(lon, bounds.lonMin, bounds.lonMax);
     return this.haversineKm(lat, lon, closestLat, closestLon) <= radiusKm;
+  }
+
+  /**
+   * The longitude in [lonMin, lonMax] nearest to `lon`, going the short way
+   * round the globe.
+   *
+   * A plain clamp is wrong at the antimeridian, because -180 and +180 are the
+   * same meridian and a numeric comparison does not know it. Measured before
+   * this: a query at lon 179.99 against the cell spanning -180 to -179.989
+   * clamped to -179.989 and measured 2.334 km, when the true nearest point is
+   * -180.0 at 1.112 km. The cell was rejected from a 2 km radius it is well
+   * inside, and five of sixteen points on that circle's rim fell outside the
+   * covering — silently.
+   *
+   * Working in deltas normalised to +/-180 removes the discontinuity: the cell
+   * either straddles the query meridian, or lies wholly to one side of it and
+   * the nearer edge is the answer.
+   */
+  private static closestLongitude(lon: number, lonMin: number, lonMax: number): number {
+    const toMin = this.normalizeLonDelta(lonMin - lon);
+    const toMax = this.normalizeLonDelta(lonMax - lon);
+
+    // Straddles the query's own meridian, so that is the closest point. A
+    // geohash cell never spans more than 180 degrees, so this reads correctly
+    // on either side of the line.
+    if (toMin <= 0 && toMax >= 0) {
+      return lon;
+    }
+
+    return Math.abs(toMin) <= Math.abs(toMax) ? lonMin : lonMax;
+  }
+
+  /** A longitude difference folded into [-180, 180]. */
+  private static normalizeLonDelta(delta: number): number {
+    return ((((delta + 180) % 360) + 360) % 360) - 180;
+  }
+
+  /**
+   * Covered area divided by the circle's, so a precision can be judged on what
+   * it wastes rather than only on what it costs.
+   */
+  private static coveredRatio(cells: string[], radiusKm: number): number {
+    const rad = (d: number) => (d * Math.PI) / 180;
+    const covered = cells.reduce((sum, hash) => {
+      const b = this.decodeBounds(hash);
+      return sum
+        + this.EARTH_RADIUS_KM * rad(b.latMax - b.latMin)
+        * this.EARTH_RADIUS_KM * Math.cos(rad((b.latMax + b.latMin) / 2)) * rad(b.lonMax - b.lonMin);
+    }, 0);
+    return covered / (Math.PI * radiusKm ** 2);
   }
 
   private static adjacent(hash: string, direction: 'n' | 's' | 'e' | 'w'): string {
