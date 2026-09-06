@@ -12,6 +12,7 @@ export {
 export { FilterOperation } from './types';
 export { SERVING_STATUS } from './grpc/loadProto';
 export type {
+  BatchDeleteResponse,
   BatchEntityInput,
   BatchIndexResponse,
   DeleteResponse,

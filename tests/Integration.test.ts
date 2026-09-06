@@ -43,6 +43,8 @@ async function startMockEngine(options: {
    * and the empty overall-server key. Defaults to SERVING; 2 is NOT_SERVING.
    */
   servingStatus?: number;
+  /** Ids this fake engine still holds, for batchDeleteEntities. */
+  liveIds?: string[];
   /** Serve no health service at all, as an engine predating it would. */
   omitHealthService?: boolean;
 } = {}): Promise<MockEngine> {
@@ -109,6 +111,18 @@ async function startMockEngine(options: {
     ) {
       capture('deleteEntity', call);
       callback(null, { success: true });
+    },
+    batchDeleteEntities(
+      call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>,
+      callback: grpc.sendUnaryData<{ deletedCount: number }>,
+    ) {
+      capture('batchDeleteEntities', call);
+      const ids = (call.request?.entityIds as string[] | undefined) ?? [];
+      // Only ids the engine still holds count, so a test can tell the number
+      // asked about from the number that actually changed.
+      const live = new Set(options.liveIds ?? ids);
+      const changed = new Set(ids.filter((id) => live.has(id)));
+      callback(null, { deletedCount: changed.size });
     },
     search(
       call: grpc.ServerUnaryCall<Record<string, unknown>, unknown>,
@@ -363,6 +377,58 @@ describe('PulseIndex client integration', () => {
     clients.push(client);
 
     expect(await client.health()).toBe(false);
+  });
+
+  it('sends every id of a batch delete in one call', async () => {
+    const engine = await startMockEngine({});
+    engines.push(engine);
+    const client = new PulseIndexClient({
+      endpoint: `127.0.0.1:${engine.port}`,
+      apiKey: 'dev-key',
+      tenantId: 'acme',
+    });
+    clients.push(client);
+
+    const result = await client.batchDelete([1001, '1002', 1003]);
+
+    expect(result.deletedCount).toBe(3);
+    const calls = engine.calls.filter((call) => call.method === 'batchDeleteEntities');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.request.entityIds).toEqual(['1001', '1002', '1003']);
+    expect(calls[0]?.request.tenantId).toBe('acme');
+  });
+
+  it('reports the rows that changed, not the ids that were sent', async () => {
+    // Deleting ids that are already gone is not an error, and the caller has to
+    // be able to tell the difference — a retry of a page that half-applied
+    // reports the smaller number rather than failing.
+    const engine = await startMockEngine({ liveIds: ['1001'] });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    const result = await client.batchDelete([1001, 1002, 1003]);
+    expect(result.deletedCount).toBe(1);
+  });
+
+  it('names the offending element when an id is not a valid uint64', async () => {
+    const engine = await startMockEngine({});
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    await expect(client.batchDelete([1001, -5, 1003])).rejects.toThrow(/entityIds\[1\]/);
+    expect(engine.calls.filter((c) => c.method === 'batchDeleteEntities')).toHaveLength(0);
+  });
+
+  it('sends an empty batch delete without inventing a count', async () => {
+    const engine = await startMockEngine({ liveIds: [] });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    const result = await client.batchDelete([]);
+    expect(result.deletedCount).toBe(0);
   });
 
   it('reports unhealthy when the engine is unreachable', async () => {

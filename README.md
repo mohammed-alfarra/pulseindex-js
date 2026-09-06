@@ -140,6 +140,10 @@ await client.batchIndex([
 ]);
 
 await client.delete('1001');
+
+// Clearing many rows: send ids in pages of up to 10,000. A larger page is
+// refused by name rather than truncated.
+await client.batchDelete([1002, 1003, 1004]);
 ```
 
 Low-level PHP-compatible helper:
@@ -293,6 +297,7 @@ than failing your own requests immediately; if it persists, contact support.
 | `client.index(id, attributes)` | `{ success }` | Upsert one entity |
 | `client.batchIndex(entities)` | `{ indexedCount }` | Batch upsert |
 | `client.delete(id)` | `{ success }` | Soft-delete an entity |
+| `client.batchDelete(ids)` | `{ deletedCount }` | Soft-delete up to 10,000 entities in one call |
 | `client.health()` | `boolean` | Whether the service is ready to answer queries |
 | `client.servingStatus()` | `number` | Readiness as a status code, when you need more than a boolean |
 | `client.close()` | `void` | Shut down the channel pool |

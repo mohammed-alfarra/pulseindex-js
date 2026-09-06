@@ -5,6 +5,7 @@ import {
   PulseIndexConnectionError,
 } from '../errors/PulseIndexError';
 import {
+  type BatchDeleteResponse,
   type BatchEntityInput,
   type BatchIndexResponse,
   type DeleteResponse,
@@ -136,6 +137,47 @@ export class PulseIndexClient implements QueryExecutor {
   async deleteEntity(entityId: EntityId, tenantId = ''): Promise<boolean> {
     const response = await this.delete(entityId, tenantId || this.connection.tenantId);
     return response.success;
+  }
+
+  /**
+   * Delete many entities in one call.
+   *
+   * `delete` takes a single id, so clearing a catalogue that way is one round
+   * trip per row. Send ids in pages of up to 10,000; the engine refuses a
+   * larger batch by name rather than truncating it, so a page that is too big
+   * fails loudly instead of deleting part of itself.
+   *
+   * Ids that are unknown or already deleted are skipped, so retrying a page
+   * that half-applied is safe. `deletedCount` is the number of rows that
+   * actually changed, which is lower than `entityIds.length` whenever some of
+   * them were already gone.
+   *
+   * ```ts
+   * for (const page of pages(allIds, 10_000)) {
+   *   await client.batchDelete(page);
+   * }
+   * ```
+   */
+  async batchDelete(
+    entityIds: readonly EntityId[],
+    tenantId?: string,
+  ): Promise<BatchDeleteResponse> {
+    const ids = entityIds.map((id, i) => toUint64String(id, `entityIds[${i}]`));
+
+    const raw = await this.unary<{ deletedCount?: number | string }>(
+      (stub, metadata, options, callback) =>
+        stub.batchDeleteEntities(
+          {
+            entityIds: ids,
+            tenantId: tenantId ?? this.connection.tenantId,
+          },
+          metadata,
+          options,
+          callback,
+        ),
+    );
+
+    return { deletedCount: Number(raw.deletedCount ?? 0) };
   }
 
   /**

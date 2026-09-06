@@ -32,6 +32,7 @@ const EXPECTED: ProtoSchema = {
     'IndexEntity(IndexEntityRequest) -> IndexEntityResponse',
     'BatchIndexEntities(BatchIndexEntitiesRequest) -> BatchIndexEntitiesResponse',
     'DeleteEntity(DeleteEntityRequest) -> DeleteEntityResponse',
+    'BatchDeleteEntities(BatchDeleteEntitiesRequest) -> BatchDeleteEntitiesResponse',
     'Search(SearchQueryRequest) -> SearchQueryResponse',
   ],
   messages: {
@@ -47,6 +48,8 @@ const EXPECTED: ProtoSchema = {
     BatchIndexEntitiesResponse: ['1:uint32 indexed_count'],
     DeleteEntityRequest: ['1:uint64 entity_id', '2:string tenant_id'],
     DeleteEntityResponse: ['1:bool success'],
+    BatchDeleteEntitiesRequest: ['1:repeated uint64 entity_ids', '2:string tenant_id'],
+    BatchDeleteEntitiesResponse: ['1:uint32 deleted_count'],
     FilterPredicate: ['1:Operation op', '2:string attribute', '3:uint32 group'],
     RangePredicate: ['1:string field', '2:uint32 min_val', '3:uint32 max_val'],
     SortSpec: ['1:string field', '2:bool descending'],

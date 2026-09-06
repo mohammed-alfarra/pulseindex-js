@@ -32,6 +32,12 @@ export interface SearchEngineServiceClient extends grpc.Client {
     options: grpc.CallOptions,
     callback: grpc.requestCallback<unknown>,
   ): grpc.ClientUnaryCall;
+  batchDeleteEntities(
+    request: unknown,
+    metadata: grpc.Metadata,
+    options: grpc.CallOptions,
+    callback: grpc.requestCallback<unknown>,
+  ): grpc.ClientUnaryCall;
   search(
     request: unknown,
     metadata: grpc.Metadata,

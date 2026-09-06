@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.2.0
+
+### Delete many entities in one call
+
+`delete()` takes a single id, so clearing a catalogue meant one round trip per
+row. There was no other way to do it through the API at all.
+
+```ts
+for (const page of pages(idsToRemove, 10_000)) {
+  const { deletedCount } = await client.batchDelete(page);
+}
+```
+
+Up to 10,000 ids per call. A larger page is refused by name rather than
+truncated, so a page that is too big fails loudly instead of deleting part of
+itself and reporting success.
+
+Ids that are unknown or already deleted are skipped rather than refused, so
+retrying a page that half-applied is safe. `deletedCount` is the number of rows
+that actually changed, which is lower than the number of ids you sent whenever
+some were already gone.
+
 ## 3.1.0
 
 ### A radius no longer merges with your own OR

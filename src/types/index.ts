@@ -83,6 +83,14 @@ export interface DeleteResponse {
   success: boolean;
 }
 
+export interface BatchDeleteResponse {
+  /**
+   * How many rows actually changed. Lower than the number of ids sent when
+   * some were unknown or already deleted, which is not an error.
+   */
+  deletedCount: number;
+}
+
 export interface RadiusOptions {
   lat: number;
   lng?: number;
