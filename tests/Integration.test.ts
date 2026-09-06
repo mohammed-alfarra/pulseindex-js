@@ -431,6 +431,38 @@ describe('PulseIndex client integration', () => {
     expect(result.deletedCount).toBe(0);
   });
 
+  // A paged search stops as soon as the page is full, so its total is whatever
+  // it had counted when it stopped. Measured on a million entities: a query
+  // with 166,325 matches reported 10,866 for a page of 100.
+  it('marks a paged total inexact and searchWithTotal fixes it', async () => {
+    const engine = await startMockEngine({ searchIds: ['1', '2', '3'] });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    const paged = await client.search(client.query().must('a:b').limit(10));
+    expect(paged.totalIsExact).toBe(false);
+
+    const counted = await client.search(client.query().must('a:b').limit(0));
+    expect(counted.totalIsExact).toBe(true);
+
+    const both = await client.searchWithTotal(client.query().must('a:b').limit(10));
+    expect(both.totalIsExact).toBe(true);
+    expect(both.matchedEntityIds).toEqual(['1', '2', '3']);
+    // Two calls, not one: the page and the count.
+    expect(engine.calls.filter((c) => c.method === 'search')).toHaveLength(4);
+  });
+
+  it('does not send a second call when the search already counted everything', async () => {
+    const engine = await startMockEngine({});
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    await client.searchWithTotal(client.query().must('a:b').limit(0));
+    expect(engine.calls.filter((c) => c.method === 'search')).toHaveLength(1);
+  });
+
   it('reports unhealthy when the engine is unreachable', async () => {
     const client = new PulseIndexClient({
       endpoint: '127.0.0.1:1',

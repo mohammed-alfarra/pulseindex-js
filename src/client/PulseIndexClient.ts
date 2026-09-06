@@ -67,6 +67,41 @@ export class PulseIndexClient implements QueryExecutor {
       matchedEntityIds: (raw.matchedEntityIds ?? []).map((id) => String(id)),
       totalMatches: Number(raw.totalMatches ?? 0),
       executionTimeUs: Number(raw.executionTimeUs ?? 0),
+      // Exact only when nothing made the engine stop early. limit=0 asks for
+      // the count and no ids, and is the only shape that counts every match;
+      // any page can early-exit as soon as it is full.
+      totalIsExact: builder.toArray().limit === 0,
+    };
+  }
+
+  /**
+   * A page of ids together with the real number of matches.
+   *
+   * A paged search stops as soon as the page is full — that is what makes it
+   * cost microseconds — so its total is whatever it had counted when it
+   * stopped. Measured on a million entities: a query with 166,325 matches
+   * reported 10,866 for a page of 100. Anything that prints "page 1 of N" from
+   * that number is wrong by an order of magnitude and looks fine.
+   *
+   * This sends the count query as well, so it costs two round trips and returns
+   * a total you can divide by a page size.
+   */
+  async searchWithTotal(
+    query: QueryBuilder | SearchRequestOptions,
+  ): Promise<SearchResponse> {
+    const page = await this.search(query);
+    if (page.totalIsExact) {
+      return page;
+    }
+
+    const builder = query instanceof QueryBuilder ? query : QueryBuilder.fromOptions(query);
+    const counted = await this.search(builder.limit(0));
+
+    return {
+      matchedEntityIds: page.matchedEntityIds,
+      totalMatches: counted.totalMatches,
+      executionTimeUs: page.executionTimeUs + counted.executionTimeUs,
+      totalIsExact: true,
     };
   }
 
