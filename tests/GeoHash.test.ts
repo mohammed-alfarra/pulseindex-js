@@ -70,7 +70,9 @@ describe('GeoHash', () => {
     // Small circles need the fine cell: the coarse one wastes 6.91x the area
     // at 2 km and 2.76x at 5 km, well past what is acceptable.
     expect(GeoHash.optimalPrecisionForRadius(0.5, lat, lon)).toBe(6);
-    expect(GeoHash.optimalPrecisionForRadius(5.0, lat, lon)).toBe(6);
+    // 5 km takes the coarse cell: 2.76x wasted against 10 cells, where the
+    // fine one costs 140 to reach 1.21x. A pre-filter is worth 2.76x.
+    expect(GeoHash.optimalPrecisionForRadius(5.0, lat, lon)).toBe(5);
     // Large ones do not. At 15 km the coarse cell is already within 1.44x, and
     // the fine one would cost 1,120 cells instead of 47 to reach 1.07x.
     expect(GeoHash.optimalPrecisionForRadius(15.0, lat, lon)).toBe(5);
@@ -205,17 +207,20 @@ describe('GeoHash', () => {
         return sum + 6371 * rad(b.latMax - b.latMin)
           * 6371 * Math.cos(rad((b.latMax + b.latMin) / 2)) * rad(b.lonMax - b.lonMin);
       }, 0);
-      expect(covered / (Math.PI * radius ** 2), `${radius}km`).toBeLessThan(2.0);
+      // The bound is the threshold the chooser works to, plus the slack a
+      // circle smaller than one cell cannot avoid.
+      const bound = radius < 1 ? 5.0 : GeoHash.ACCEPTABLE_COVER_RATIO + 0.01;
+      expect(covered / (Math.PI * radius ** 2), `${radius}km`).toBeLessThan(bound);
     }
   });
 
   it('covers a radius with the centre cell first', () => {
     const hashes = GeoHash.getCoveringHashes(42.6, -5.6, 4.9);
-    expect(hashes[0]).toBe('ezs42e');
+    expect(hashes[0]).toBe('ezs42');
     expect(hashes.length).toBeGreaterThanOrEqual(1);
     expect(hashes).toEqual([...new Set(hashes)]);
     for (const hash of hashes) {
-      expect(hash).toHaveLength(6);
+      expect(hash).toHaveLength(5);
     }
   });
 

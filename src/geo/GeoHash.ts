@@ -31,11 +31,17 @@ export class GeoHash {
    * How much area outside the circle a covering may carry before a finer
    * precision is worth its cell count.
    *
-   * 2.0 is where the measured choices come out right at every radius: it
-   * rejects the coarse cell at 2 km (6.91x) and 5 km (2.76x) and accepts it at
-   * 15 km (1.44x), which is also where the cell count turns from 47 into 1,120.
+   * `withinRadius` is a pre-filter the caller narrows exactly afterwards, so
+   * excess area is cheaper than predicates.
+   *
+   * 2.0 was the first attempt and it was too strict. It rejected the coarse
+   * cell at 5 km, so a covering that had cost 10 cells cost 167, and the demo
+   * benchmark went from beating PostgreSQL to losing to it by 2.76x on wall
+   * time — the cost is the request, not the search. 3.0 keeps the cheap
+   * covering at 5 km (2.76x) and still rejects the coarse cell at 2 km, where
+   * it wastes 4.73x to 6.91x depending on latitude.
    */
-  static readonly ACCEPTABLE_COVER_RATIO = 2.0;
+  static readonly ACCEPTABLE_COVER_RATIO = 3.0;
 
   private static readonly NEIGHBORS: Record<'n' | 's' | 'e' | 'w', [string, string]> = {
     n: ['p0r21436x8zb9dcf5h7kjnmqesgutwvy', 'bc01fg45238967deuvhjyznpkmstqrwx'],
