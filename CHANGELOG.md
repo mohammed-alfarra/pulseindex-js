@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.0.1
+
+### The covering threshold, corrected against a real app
+
+`withinRadius` is a pre-filter the caller narrows exactly afterwards, so excess
+area is cheaper than predicates. 4.0.0's threshold was too strict: it rejected
+the coarse cell at 5 km, turning a 10-cell covering into 167. Measured through
+the sibling PHP SDK against a real application with 100,000 properties, a 5 km
+radius went from 3,082 µs to 926 µs on wall time — the cost is the request, not
+the search.
+
+The coarse cell is now taken up to 3.0× the circle, which still rejects it at
+2 km where it wastes 4.73× to 6.91×. Both SDKs are regenerated against one
+shared vector fixture, so they still agree cell for cell.
+
 ## 4.0.0
 
 **A major, not a minor.** The previous draft of these notes said 3.2.0. Checking
@@ -29,25 +44,6 @@ what actually breaks says otherwise, so the number says otherwise too.
 4. **`SearchResponse` gained a required `totalIsExact`.** Code that *builds* the
    type — a test double, a cache, a mapper — fails to compile until it sets it
    (`TS2741`). Code that only reads search results is unaffected.
-
-### The covering threshold, corrected against a real app
-
-`withinRadius` is a pre-filter the caller narrows exactly afterwards, so excess
-area is cheaper than predicates. The first threshold was too strict: it rejected
-the coarse cell at 5 km, turning a 10-cell covering into 167, and a real demo
-app's benchmark went from beating PostgreSQL to losing to it by 2.76x on wall
-time. The cost is the request, not the search.
-
-Measured in that app, 100,000 properties, 5 km radius:
-
-| | before | after |
-|---|---|---|
-| covering | 167 cells | 10 cells |
-| p50 wall | 3,082 us | 926 us |
-| against PostgreSQL | 2.76x slower | 1.35x faster |
-
-The coarse cell is now taken up to 3.0x the circle, which still rejects it at
-2 km where it wastes 4.73x to 6.91x.
 
 ### Migrating
 
