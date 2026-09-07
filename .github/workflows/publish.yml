@@ -56,6 +56,21 @@ jobs:
           fi
           echo "tag and package.json agree on $pkg"
 
+      # Provenance rejects a package whose repository.url does not match the
+      # repository it was built in, and it rejects it at the registry — after
+      # the build, the tests and a signed statement already in the public
+      # transparency log. The field was simply absent here, which every manual
+      # publish tolerated because none of them asked for provenance.
+      - name: Refuse a package.json that provenance will reject
+        run: |
+          url="$(node -p 'require("./package.json").repository?.url ?? ""')"
+          want="github.com/${GITHUB_REPOSITORY}"
+          case "$url" in
+            *"$want"*) echo "repository.url points at $want" ;;
+            "") echo "::error::package.json has no repository.url; provenance requires it to match $want"; exit 1 ;;
+            *)  echo "::error::package.json repository.url is $url, expected to contain $want"; exit 1 ;;
+          esac
+
       - name: Build
         run: npm run build
 
