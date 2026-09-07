@@ -74,9 +74,16 @@ jobs:
           fi
           echo "$v is not published yet"
 
+      # No NODE_AUTH_TOKEN on purpose. The package is configured on npmjs.com to
+      # trust this repository and this workflow file, so npm authenticates over
+      # OIDC using the id-token permission above. Passing the variable from a
+      # secret that does not exist would write an empty _authToken into .npmrc,
+      # and npm would then attempt token auth with an empty token rather than
+      # falling through to OIDC — a 401 that reads like a missing secret.
+      #
+      # If Trusted Publishing is ever removed, add back:
+      #   env:
+      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # with an npm **automation** token, which is the type that bypasses 2FA.
       - name: Publish
         run: npm publish --access public --provenance
-        env:
-          # Left in as the fallback for as long as Trusted Publishing is not
-          # configured. With it configured this variable is unset and unused.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
