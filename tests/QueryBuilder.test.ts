@@ -29,16 +29,16 @@ describe('QueryBuilder', () => {
       .should('amenity:parking')
       .mustNot('feature:shared')
       .range('price', 100, 500)
-      .location(42)
+      .exactTotal()
       .limit(25)
       .offset(10);
 
     expect(base.toArray().filters).toEqual([]);
     expect(built.toArray()).toEqual({
       tenantId: 'acme',
-      locationPrefix: '42',
       limit: 25,
       offset: 10,
+      exactTotal: true,
       filters: [
         { op: FilterOperation.MUST, attribute: 'feature:pool', group: 0 },
         { op: FilterOperation.SHOULD, attribute: 'amenity:parking', group: 0 },

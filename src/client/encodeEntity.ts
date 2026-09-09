@@ -1,21 +1,27 @@
 import { GeoHash } from '../geo/GeoHash';
 import { PulseIndexQueryError } from '../errors/PulseIndexError';
 import {
-  UINT32_MAX,
   type EncodedEntity,
   type EntityAttributes,
   type EntityId,
   type EntityInput,
 } from '../types';
 
+/**
+ * Keys this encoder consumes itself, so they are not also emitted as tags.
+ *
+ * `price`, `locationPrefix` and `location_prefix` used to be in here because
+ * the wire had fields by those names. They no longer exist, and a record whose
+ * own attributes included one was silently losing it: `{price: 250}` came out
+ * of here as no tag and no number at all. Numbers now go through `numbers`
+ * under whatever name you gave them.
+ */
 const SKIP_ATTRIBUTE_KEYS = new Set([
   'id',
   'entityId',
   'entity_id',
   'attributes',
-  'price',
-  'locationPrefix',
-  'location_prefix',
+  'numbers',
   'tenantId',
   'tenant_id',
   'latitude',
@@ -51,15 +57,57 @@ export function toUint64String(value: EntityId, field = 'entityId'): string {
   return trimmed.replace(/^0+(?=\d)/, '');
 }
 
-export function toUint32(value: unknown, field: string): number {
-  if (value === undefined || value === null || value === '') {
-    return 0;
-  }
+/**
+ * One numeric field's value, as the engine stores it.
+ *
+ * The engine's column is a 64-bit integer. This used to be a 32-bit unsigned
+ * one that floored whatever it was given, so `4.3` was sent as `4`, `0.5` as
+ * `0` and `199.99` as `199` — silently, which is the worst way to lose a
+ * value. A fraction is refused now, with the scaling it needs named, because
+ * `4.3` is only ever a lie once it has been stored as `4`.
+ */
+export function toFieldValue(value: unknown, field: string): number {
   const numeric = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(numeric) || numeric < 0 || numeric > UINT32_MAX) {
-    throw new PulseIndexQueryError(`${field} must be an integer between 0 and ${UINT32_MAX}.`);
+  if (!Number.isFinite(numeric)) {
+    throw new PulseIndexQueryError(`${field} must be a finite number.`);
   }
-  return Math.floor(numeric);
+  if (!Number.isInteger(numeric)) {
+    throw new PulseIndexQueryError(
+      `${field} is ${numeric}, and the engine stores whole numbers. Scale it to an ` +
+        `integer and keep the scale on your side — a price in cents, a rating out of 100.`,
+    );
+  }
+  if (!Number.isSafeInteger(numeric)) {
+    throw new PulseIndexQueryError(`${field} is past the range JavaScript can hold exactly.`);
+  }
+  return numeric;
+}
+
+/**
+ * The numeric fields of one record, from `numbers` on the input.
+ *
+ * Names are yours. Nothing here knows what any of them mean.
+ */
+function collectNumbers(merged: Record<string, unknown>): Record<string, number> {
+  const source = merged.numbers;
+  if (source === undefined || source === null) {
+    return {};
+  }
+  if (typeof source !== 'object' || Array.isArray(source)) {
+    throw new PulseIndexQueryError('numbers must be an object of field name to number.');
+  }
+
+  const out: Record<string, number> = {};
+  for (const [name, value] of Object.entries(source as Record<string, unknown>)) {
+    if (!name.trim()) {
+      throw new PulseIndexQueryError('A numeric field name must not be empty.');
+    }
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    out[name] = toFieldValue(value, name);
+  }
+  return out;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -196,11 +244,7 @@ export function encodeEntity(
   return {
     entityId: toUint64String(rawId as EntityId, 'entityId'),
     categories: flattenAttributes(merged),
-    price: toUint32(merged.price, 'price'),
-    locationPrefix: toUint64String(
-      (merged.locationPrefix ?? merged.location_prefix ?? 0) as EntityId,
-      'locationPrefix',
-    ),
+    numbers: collectNumbers(merged),
     tenantId,
   };
 }

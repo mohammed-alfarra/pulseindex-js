@@ -130,14 +130,20 @@ async function startMockEngine(options: {
         matchedEntityIds: string[];
         totalMatches: number;
         executionTimeUs: string;
+        totalIsExact: boolean;
       }>,
     ) {
       capture('search', call);
       const ids = options.searchIds ?? ['1001'];
+      const req = (call.request ?? {}) as { exactTotal?: boolean; limit?: number };
+      // What the engine does: the scan runs to the end when the caller asked
+      // for a true count, or when there is no page to stop it.
+      const counted = Boolean(req.exactTotal) || Number(req.limit ?? 0) === 0;
       callback(null, {
         matchedEntityIds: ids,
-        totalMatches: ids.length,
+        totalMatches: counted ? ids.length * 10 : ids.length,
         executionTimeUs: '42',
+        totalIsExact: counted,
       });
     },
   });
@@ -224,6 +230,9 @@ describe('PulseIndex client integration', () => {
       categories: ['feature:pool'],
       status: 'listed',
       amenities: ['parking', 'gym'],
+      numbers: { price_cents: 150000, bedrooms: 3 },
+      // No longer special: a top-level scalar is a tag like any other, and
+      // `price` used to be swallowed as the one number the SDK named for you.
       price: 1500,
       lat: 42.6,
       lng: -5.6,
@@ -231,7 +240,7 @@ describe('PulseIndex client integration', () => {
     });
 
     expect(encoded.entityId).toBe('1001');
-    expect(encoded.price).toBe(1500);
+    expect(encoded.numbers).toEqual({ price_cents: 150000, bedrooms: 3 });
     expect(encoded.tenantId).toBe('acme');
     expect(encoded.categories).toEqual(
       expect.arrayContaining([
@@ -239,6 +248,7 @@ describe('PulseIndex client integration', () => {
         'status:listed',
         'amenities:parking',
         'amenities:gym',
+        'price:1500',
         ...GeoHash.encodeMultiTags(42.6, -5.6),
       ]),
     );
@@ -259,7 +269,7 @@ describe('PulseIndex client integration', () => {
     const indexed = await client.index('1001', {
       categories: ['feature:pool'],
       amenities: ['parking'],
-      price: 1500,
+      numbers: { price_cents: 150000, bedrooms: 3 },
       lat: 41.0082,
       lng: 28.9784,
     });
@@ -297,7 +307,9 @@ describe('PulseIndex client integration', () => {
     const indexRequest = engine.calls.find((call) => call.method === 'indexEntity')?.request;
     expect(indexRequest?.entityId).toBe('1001');
     expect(indexRequest?.tenantId).toBe('acme');
-    expect(indexRequest?.price).toBe(1500);
+    // int64 arrives as a string, the same as entityId does: the loader is set
+    // to `longs: String` so a value past 2^53 survives the trip intact.
+    expect(indexRequest?.numbers).toEqual({ price_cents: '150000', bedrooms: '3' });
     expect(indexRequest?.categories).toEqual(
       expect.arrayContaining(['feature:pool', 'amenities:parking']),
     );
@@ -434,7 +446,7 @@ describe('PulseIndex client integration', () => {
   // A paged search stops as soon as the page is full, so its total is whatever
   // it had counted when it stopped. Measured on a million entities: a query
   // with 166,325 matches reported 10,866 for a page of 100.
-  it('marks a paged total inexact and searchWithTotal fixes it', async () => {
+  it('reads exactness off the wire instead of guessing it from the limit', async () => {
     const engine = await startMockEngine({ searchIds: ['1', '2', '3'] });
     engines.push(engine);
     const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
@@ -442,18 +454,31 @@ describe('PulseIndex client integration', () => {
 
     const paged = await client.search(client.query().must('a:b').limit(10));
     expect(paged.totalIsExact).toBe(false);
+    expect(paged.totalMatches).toBe(3);
 
     const counted = await client.search(client.query().must('a:b').limit(0));
     expect(counted.totalIsExact).toBe(true);
-
-    const both = await client.searchWithTotal(client.query().must('a:b').limit(10));
-    expect(both.totalIsExact).toBe(true);
-    expect(both.matchedEntityIds).toEqual(['1', '2', '3']);
-    // Two calls, not one: the page and the count.
-    expect(engine.calls.filter((c) => c.method === 'search')).toHaveLength(4);
+    expect(counted.totalMatches).toBe(30);
   });
 
-  it('does not send a second call when the search already counted everything', async () => {
+  it('gets a page and a true total in one request, not two', async () => {
+    const engine = await startMockEngine({ searchIds: ['1', '2', '3'] });
+    engines.push(engine);
+    const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });
+    clients.push(client);
+
+    const both = await client.searchWithTotal(client.query().must('a:b').limit(10));
+
+    expect(both.matchedEntityIds).toEqual(['1', '2', '3']);
+    expect(both.totalIsExact).toBe(true);
+    // The whole set, not the part the page saw.
+    expect(both.totalMatches).toBe(30);
+    // One call. This used to run the entire query twice.
+    expect(engine.calls.filter((c) => c.method === 'search')).toHaveLength(1);
+    expect(engine.calls[0]?.request?.exactTotal).toBe(true);
+  });
+
+  it('still sends one call when the query already counted everything', async () => {
     const engine = await startMockEngine({});
     engines.push(engine);
     const client = new PulseIndexClient({ endpoint: `127.0.0.1:${engine.port}`, apiKey: 'dev-key' });

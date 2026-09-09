@@ -38,12 +38,13 @@ export interface RangePredicate {
 }
 
 export interface SearchQueryRequest {
-  locationPrefix: string;
   filters: FilterPredicate[];
   ranges: RangePredicate[];
   limit: number;
   offset: number;
   tenantId: string;
+  /** Count every match rather than stopping when the page is full. */
+  exactTotal: boolean;
   /** Absent returns matches in entity-id order. */
   sort?: SortSpec;
 }
@@ -67,8 +68,7 @@ export interface SearchResponse {
 
 export interface IndexEntityRequest {
   entityId: string;
-  locationPrefix: string;
-  price: number;
+  numbers: Record<string, number>;
   categories: string[];
   tenantId: string;
 }
@@ -112,7 +112,8 @@ export interface RadiusOptions {
 
 export interface SearchRequestOptions {
   tenantId?: string;
-  locationPrefix?: EntityId;
+  /** Count every match rather than stopping when the page is full. */
+  exactTotal?: boolean;
   must?: string | string[];
   should?: string | string[];
   mustNot?: string | string[];
@@ -133,9 +134,7 @@ export interface SearchRequestOptions {
 export interface EntityAttributes {
   categories?: unknown;
   tags?: unknown;
-  price?: unknown;
-  locationPrefix?: unknown;
-  location_prefix?: unknown;
+  numbers?: unknown;
   tenantId?: unknown;
   tenant_id?: unknown;
   latitude?: unknown;
@@ -153,9 +152,7 @@ export interface EntityInput {
   attributes?: EntityAttributes;
   categories?: unknown;
   tags?: unknown;
-  price?: unknown;
-  locationPrefix?: unknown;
-  location_prefix?: unknown;
+  numbers?: unknown;
   tenantId?: unknown;
   tenant_id?: unknown;
   latitude?: unknown;
@@ -177,8 +174,11 @@ export interface BatchEntityInput {
 export interface EncodedEntity {
   entityId: string;
   categories: string[];
-  price: number;
-  locationPrefix: string;
+  /**
+   * Numeric fields under your own names. Any name, any integer, any number of
+   * them. This replaced a single `price` field the engine named for you.
+   */
+  numbers: Record<string, number>;
   tenantId: string;
 }
 

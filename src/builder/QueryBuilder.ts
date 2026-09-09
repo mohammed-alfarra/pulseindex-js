@@ -18,7 +18,7 @@ export interface QueryExecutor {
 
 interface QueryState {
   tenantId: string;
-  locationPrefix: string;
+  exactTotal: boolean;
   limit: number;
   offset: number;
   filters: FilterPredicate[];
@@ -48,7 +48,7 @@ export const DEFAULT_LIMIT = 100;
 function emptyState(): QueryState {
   return {
     tenantId: '',
-    locationPrefix: '0',
+    exactTotal: false,
     limit: DEFAULT_LIMIT,
     offset: 0,
     filters: [],
@@ -90,9 +90,17 @@ export class QueryBuilder {
     });
   }
 
-  location(locationPrefix: string | number | bigint): QueryBuilder {
+  /**
+   * Count every match instead of stopping as soon as the page is full.
+   *
+   * A paged search stops early, so the `totalMatches` it carries is only what
+   * the engine had counted by then — a lower bound, and one that does not look
+   * like one. This makes the count exact in the same request; `totalIsExact`
+   * on the response says which you got.
+   */
+  exactTotal(enabled = true): QueryBuilder {
     return this.fork((state) => {
-      state.locationPrefix = String(locationPrefix);
+      state.exactTotal = enabled;
     });
   }
 
@@ -173,6 +181,15 @@ export class QueryBuilder {
     });
   }
 
+  /**
+   * Filter on a numeric field's inclusive range.
+   *
+   * `price` is the only number an entity carries. Naming any other field is
+   * refused by the engine rather than answered, because a field nothing carries
+   * can only match nothing, and an empty page looks exactly like a real one.
+   * Model any other number as a category token instead: `must('bedrooms:3')`,
+   * or several in one SHOULD group for a range of values.
+   */
   range(field: string, min: number, max: number): QueryBuilder {
     if (!field.trim()) {
       throw new PulseIndexQueryError('Range field must not be empty.');
@@ -226,9 +243,12 @@ export class QueryBuilder {
   }
 
   /**
-   * Order the page by a numeric field. Rows carrying no value for it sort last
-   * in both directions; they still count towards `totalMatches`, they simply
-   * have nothing to be ordered by.
+   * Order the page by a numeric field.
+   *
+   * Bounded exactly as {@link range} is: `price` is the only field an entity
+   * carries, and any other name is refused rather than silently ignored. An
+   * order by a field nothing carries used to leave the page in insertion order
+   * and report it as sorted.
    */
   sortBy(field: string, descending = false): QueryBuilder {
     if (!field.trim()) {
@@ -242,9 +262,9 @@ export class QueryBuilder {
   toRequest(defaultTenantId = ''): SearchQueryRequest {
     const request: SearchQueryRequest = {
       tenantId: this.state.tenantId || defaultTenantId,
-      locationPrefix: this.state.locationPrefix,
       limit: this.state.limit,
       offset: this.state.offset,
+      exactTotal: this.state.exactTotal,
       filters: this.state.filters.map((filter) => ({ ...filter })),
       ranges: this.state.ranges.map((range) => ({ ...range })),
     };
@@ -276,8 +296,8 @@ export class QueryBuilder {
     if (options.tenantId !== undefined) {
       query = query.tenant(options.tenantId);
     }
-    if (options.locationPrefix !== undefined) {
-      query = query.location(options.locationPrefix);
+    if (options.exactTotal !== undefined) {
+      query = query.exactTotal(options.exactTotal);
     }
     if (options.must !== undefined) {
       query = query.must(options.must);
@@ -335,9 +355,9 @@ export class QueryBuilder {
     const next = new QueryBuilder(this.executor);
     next.state = {
       tenantId: this.state.tenantId,
-      locationPrefix: this.state.locationPrefix,
       limit: this.state.limit,
       offset: this.state.offset,
+      exactTotal: this.state.exactTotal,
       filters: this.state.filters.map((filter) => ({ ...filter })),
       ranges: this.state.ranges.map((range) => ({ ...range })),
       sort: this.state.sort ? { ...this.state.sort } : null,

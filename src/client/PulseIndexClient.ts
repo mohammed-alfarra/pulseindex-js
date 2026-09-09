@@ -67,10 +67,11 @@ export class PulseIndexClient implements QueryExecutor {
       matchedEntityIds: (raw.matchedEntityIds ?? []).map((id) => String(id)),
       totalMatches: Number(raw.totalMatches ?? 0),
       executionTimeUs: Number(raw.executionTimeUs ?? 0),
-      // Exact only when nothing made the engine stop early. limit=0 asks for
-      // the count and no ids, and is the only shape that counts every match;
-      // any page can early-exit as soon as it is full.
-      totalIsExact: builder.toArray().limit === 0,
+      // The engine says so now. This used to be inferred from `limit === 0`,
+      // which is a rule this SDK had to keep in step with the engine's own by
+      // hand, and which called a page inexact even when every match fit inside
+      // it and nothing was skipped.
+      totalIsExact: Boolean(raw.totalIsExact),
     };
   }
 
@@ -83,26 +84,16 @@ export class PulseIndexClient implements QueryExecutor {
    * reported 10,866 for a page of 100. Anything that prints "page 1 of N" from
    * that number is wrong by an order of magnitude and looks fine.
    *
-   * This sends the count query as well, so it costs two round trips and returns
-   * a total you can divide by a page size.
+   * One request. This used to run the whole query twice — once for the page,
+   * once for the count — because the wire had no way to ask for both. It does
+   * now, so this is the same round trip with `exactTotal` set, and the total
+   * you get back can be divided by a page size.
    */
   async searchWithTotal(
     query: QueryBuilder | SearchRequestOptions,
   ): Promise<SearchResponse> {
-    const page = await this.search(query);
-    if (page.totalIsExact) {
-      return page;
-    }
-
-    const builder = query instanceof QueryBuilder ? query : QueryBuilder.fromOptions(query);
-    const counted = await this.search(builder.limit(0));
-
-    return {
-      matchedEntityIds: page.matchedEntityIds,
-      totalMatches: counted.totalMatches,
-      executionTimeUs: page.executionTimeUs + counted.executionTimeUs,
-      totalIsExact: true,
-    };
+    const builder = query instanceof QueryBuilder ? query : QueryBuilder.fromOptions(query, this);
+    return this.search(builder.exactTotal());
   }
 
   async index(
@@ -119,18 +110,23 @@ export class PulseIndexClient implements QueryExecutor {
     return { success: Boolean(raw.success) };
   }
 
+  /**
+   * Index one record.
+   *
+   * `numbers` are yours to name: `{price_cents: 45000, bedrooms: 3}`. This
+   * used to take a single `price` and a `locationPrefix`, which was a schema
+   * this SDK had no business imposing.
+   */
   async indexEntity(
     entityId: EntityId,
     categories: string[] = [],
-    price = 0,
-    locationPrefix: EntityId = 0,
+    numbers: Record<string, number> = {},
     tenantId = '',
   ): Promise<boolean> {
     const response = await this.index({
       entityId,
       categories,
-      price,
-      locationPrefix,
+      numbers,
       tenantId: tenantId || this.connection.tenantId,
     });
     return response.success;
@@ -312,6 +308,7 @@ export class PulseIndexClient implements QueryExecutor {
 export class PulseIndex extends PulseIndexClient {}
 
 interface SearchResponseWire {
+  totalIsExact?: boolean;
   matchedEntityIds?: Array<string | number>;
   totalMatches?: number | string;
   executionTimeUs?: number | string;
@@ -320,8 +317,7 @@ interface SearchResponseWire {
 function toIndexRequest(encoded: EncodedEntity): IndexEntityRequest {
   return {
     entityId: encoded.entityId,
-    locationPrefix: encoded.locationPrefix,
-    price: encoded.price,
+    numbers: encoded.numbers,
     categories: encoded.categories,
     tenantId: encoded.tenantId,
   };

@@ -55,8 +55,16 @@ export function parseProtoSchema(text) {
     }
     body = body.replace(/\benum\s+\w+\s*\{[^}]*\}/g, '');
 
-    messages[m[1]] = [...body.matchAll(/(repeated\s+)?([\w.]+)\s+(\w+)\s*=\s*(\d+)\s*;/g)].map(
-      (f) => `${f[4]}:${f[1] ? 'repeated ' : ''}${f[2]} ${f[3]}`,
+    // `map<k, v>` is matched explicitly. It used to fall outside `[\w.]+`, so a
+    // map field was invisible to this guard — the same blind spot that once let
+    // a customer RPC go missing from a vendored copy without failing anything.
+    messages[m[1]] = [
+      ...body.matchAll(
+        /(repeated\s+)?(map\s*<\s*[\w.]+\s*,\s*[\w.]+\s*>|[\w.]+)\s+(\w+)\s*=\s*(\d+)\s*;/g,
+      ),
+    ].map(
+      (f) =>
+        `${f[4]}:${f[1] ? 'repeated ' : ''}${f[2].replace(/\s+/g, '').replace(',', ', ')} ${f[3]}`,
     );
   }
 
