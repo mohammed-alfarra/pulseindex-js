@@ -29,6 +29,15 @@ export interface SortSpec {
   field: string;
   /** Largest first when true; smallest first otherwise. */
   descending: boolean;
+  /**
+   * Order by distance from the query's geo predicate instead of by a field
+   * value. `field` is ignored.
+   *
+   * Ordering is to the centimetre, which is the precision a stored position
+   * has. Rows closer together than that tie, and a tie breaks on the entity id
+   * so the same query returns the same page.
+   */
+  byDistance?: boolean;
 }
 
 export interface RangePredicate {
@@ -37,8 +46,18 @@ export interface RangePredicate {
   maxVal: number;
 }
 
+/** A circle, and the position field to measure it against. */
+export interface GeoPredicate {
+  field: string;
+  lat: number;
+  lon: number;
+  /** Inclusive. 0 means no radius bound, only an origin to measure from. */
+  radiusKm: number;
+}
+
 export interface SearchQueryRequest {
   filters: FilterPredicate[];
+  geo?: GeoPredicate;
   ranges: RangePredicate[];
   limit: number;
   offset: number;
@@ -69,6 +88,7 @@ export interface SearchResponse {
 export interface IndexEntityRequest {
   entityId: string;
   numbers: Record<string, number>;
+  points: Record<string, GeoPoint>;
   categories: string[];
   tenantId: string;
 }
@@ -108,6 +128,16 @@ export interface RadiusOptions {
   lon?: number;
   radiusKm: number;
   precision?: number;
+  /**
+   * The position field to measure against, as named in `points` when indexing.
+   *
+   * Given one, the engine narrows on the geohash cells and then measures the
+   * true distance, so the answer holds only what is really inside the circle.
+   * Without it the cells are the whole answer, and a union of cells is a
+   * superset: measured at a million entities, a 1 km search returned 2,479
+   * rows where 1,241 were inside.
+   */
+  field?: string;
 }
 
 export interface SearchRequestOptions {
@@ -171,9 +201,17 @@ export interface BatchEntityInput {
   [key: string]: unknown;
 }
 
+/** One position in degrees. The engine packs it; this SDK does not. */
+export interface GeoPoint {
+  lat: number;
+  lon: number;
+}
+
 export interface EncodedEntity {
   entityId: string;
   categories: string[];
+  /** Positions under your own names. */
+  points: Record<string, GeoPoint>;
   /**
    * Numeric fields under your own names. Any name, any integer, any number of
    * them. This replaced a single `price` field the engine named for you.

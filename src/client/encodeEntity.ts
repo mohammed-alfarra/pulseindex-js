@@ -2,6 +2,7 @@ import { GeoHash } from '../geo/GeoHash';
 import { PulseIndexQueryError } from '../errors/PulseIndexError';
 import {
   type EncodedEntity,
+  type GeoPoint,
   type EntityAttributes,
   type EntityId,
   type EntityInput,
@@ -22,6 +23,7 @@ const SKIP_ATTRIBUTE_KEYS = new Set([
   'entity_id',
   'attributes',
   'numbers',
+  'points',
   'tenantId',
   'tenant_id',
   'latitude',
@@ -106,6 +108,45 @@ function collectNumbers(merged: Record<string, unknown>): Record<string, number>
       continue;
     }
     out[name] = toFieldValue(value, name);
+  }
+  return out;
+}
+
+/**
+ * The positions of one record, from `points` on the input.
+ *
+ * Degrees go on the wire and the engine packs them. Packing here would put the
+ * representation in two places with nothing comparing them, which is exactly
+ * how the geo defects in 4.0.0 happened: one side computed a token the other
+ * never wrote, and every answer was a plausible empty page.
+ */
+function collectPoints(merged: Record<string, unknown>): Record<string, GeoPoint> {
+  const source = merged.points;
+  if (source === undefined || source === null) {
+    return {};
+  }
+  if (typeof source !== 'object' || Array.isArray(source)) {
+    throw new PulseIndexQueryError('points must be an object of field name to {lat, lon}.');
+  }
+
+  const out: Record<string, GeoPoint> = {};
+  for (const [name, value] of Object.entries(source as Record<string, unknown>)) {
+    if (!name.trim()) {
+      throw new PulseIndexQueryError('A position field name must not be empty.');
+    }
+    const point = asRecord(value);
+    const lat = Number(point.lat ?? point.latitude);
+    const lon = Number(point.lon ?? point.lng ?? point.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      throw new PulseIndexQueryError(`${name} must be {lat, lon} with finite numbers.`);
+    }
+    if (lat < -90 || lat > 90) {
+      throw new PulseIndexQueryError(`${name}.lat is ${lat}, outside -90..90.`);
+    }
+    if (lon < -180 || lon > 180) {
+      throw new PulseIndexQueryError(`${name}.lon is ${lon}, outside -180..180.`);
+    }
+    out[name] = { lat, lon };
   }
   return out;
 }
@@ -245,6 +286,7 @@ export function encodeEntity(
     entityId: toUint64String(rawId as EntityId, 'entityId'),
     categories: flattenAttributes(merged),
     numbers: collectNumbers(merged),
+    points: collectPoints(merged),
     tenantId,
   };
 }

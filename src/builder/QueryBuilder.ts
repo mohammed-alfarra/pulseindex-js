@@ -5,6 +5,7 @@ import {
   type FilterOperationCode,
   type FilterPredicate,
   type RadiusOptions,
+  type GeoPredicate,
   type RangePredicate,
   type SearchQueryRequest,
   type SearchRequestOptions,
@@ -19,6 +20,7 @@ export interface QueryExecutor {
 interface QueryState {
   tenantId: string;
   exactTotal: boolean;
+  geo: GeoPredicate | null;
   limit: number;
   offset: number;
   filters: FilterPredicate[];
@@ -49,6 +51,7 @@ function emptyState(): QueryState {
   return {
     tenantId: '',
     exactTotal: false,
+    geo: null,
     limit: DEFAULT_LIMIT,
     offset: 0,
     filters: [],
@@ -163,7 +166,15 @@ export class QueryBuilder {
     }
 
     const covering = GeoHash.getCoveringHashes(lat, longitude, radius, resolvedPrecision);
+    const field = typeof latOrOptions === 'object' ? latOrOptions.field : undefined;
     return this.fork((state) => {
+      // Given a position field, the cells become what they are good at -
+      // narrowing which parts of the index are opened - and the engine settles
+      // the edge by measuring. Without one the cells are the whole answer, and
+      // a union of cells is a superset of the circle.
+      if (field) {
+        state.geo = { field, lat, lon: longitude, radiusKm: radius };
+      }
       // A disjunction of its own. These are one geographic constraint spelled
       // as "any of these cells", and before groups existed they went into the
       // same OR as everything else the caller had asked for with `should()` —
@@ -259,6 +270,49 @@ export class QueryBuilder {
     });
   }
 
+  /**
+   * Keep only entities within `radiusKm` of the point, measured exactly.
+   *
+   * This is the circle on its own. {@link withinRadius} with a `field` adds
+   * the geohash cells too, which is what stops the engine opening every part
+   * of the index to find them.
+   */
+  within(field: string, lat: number, lon: number, radiusKm: number): QueryBuilder {
+    if (!field.trim()) {
+      throw new PulseIndexQueryError('A position field name must not be empty.');
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(radiusKm)) {
+      throw new PulseIndexQueryError('within(field, lat, lon, radiusKm) needs finite numbers.');
+    }
+    if (radiusKm < 0) {
+      throw new PulseIndexQueryError(`A circle cannot have a radius of ${radiusKm}.`);
+    }
+    return this.fork((state) => {
+      state.geo = { field, lat, lon, radiusKm };
+    });
+  }
+
+  /**
+   * Order the page by distance from the point, nearest first.
+   *
+   * Without a radius this is "the nearest K of whatever else matched"; combine
+   * it with {@link within} or {@link withinRadius} to bound the search as well.
+   * It used to be impossible: a radius returned everything inside it unordered,
+   * so you hydrated every id from your own store before you could sort them.
+   */
+  nearest(field: string, lat: number, lon: number): QueryBuilder {
+    if (!field.trim()) {
+      throw new PulseIndexQueryError('A position field name must not be empty.');
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      throw new PulseIndexQueryError('nearest(field, lat, lon) needs finite numbers.');
+    }
+    return this.fork((state) => {
+      state.geo = { field, lat, lon, radiusKm: state.geo?.radiusKm ?? 0 };
+      state.sort = { field, descending: false, byDistance: true };
+    });
+  }
+
   toRequest(defaultTenantId = ''): SearchQueryRequest {
     const request: SearchQueryRequest = {
       tenantId: this.state.tenantId || defaultTenantId,
@@ -270,6 +324,9 @@ export class QueryBuilder {
     };
     if (this.state.sort) {
       request.sort = { ...this.state.sort };
+    }
+    if (this.state.geo) {
+      request.geo = { ...this.state.geo };
     }
     return request;
   }
@@ -361,6 +418,7 @@ export class QueryBuilder {
       filters: this.state.filters.map((filter) => ({ ...filter })),
       ranges: this.state.ranges.map((range) => ({ ...range })),
       sort: this.state.sort ? { ...this.state.sort } : null,
+      geo: this.state.geo ? { ...this.state.geo } : null,
       nextGroup: this.state.nextGroup,
     };
     mutate(next.state);

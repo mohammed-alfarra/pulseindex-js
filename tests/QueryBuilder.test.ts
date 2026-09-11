@@ -221,4 +221,48 @@ describe('QueryBuilder', () => {
     expect(() => new QueryBuilder().range('price', 500, 100)).toThrow(PulseIndexQueryError);
     expect(() => new QueryBuilder().execute()).toThrow(/no client/);
   });
+
+  it('carries a circle and an order by distance onto the request', () => {
+    const request = PulseIndex.query()
+      .must('kind:driver')
+      .within('where', 41.0369, 28.985, 3)
+      .nearest('where', 41.0369, 28.985)
+      .limit(50)
+      .toRequest('acme');
+
+    expect(request.geo).toEqual({ field: 'where', lat: 41.0369, lon: 28.985, radiusKm: 3 });
+    expect(request.sort).toEqual({ field: 'where', descending: false, byDistance: true });
+  });
+
+  it('keeps the radius when nearest is asked for after within', () => {
+    const request = PulseIndex.query()
+      .within('where', 41, 29, 7.5)
+      .nearest('where', 41, 29)
+      .toRequest();
+    expect(request.geo?.radiusKm).toBe(7.5);
+  });
+
+  it('adds the cells and the exact circle together when withinRadius names a field', () => {
+    const request = PulseIndex.query()
+      .withinRadius({ lat: 41.0369, lng: 28.985, radiusKm: 2, field: 'where' })
+      .toRequest();
+
+    expect(request.geo).toEqual({ field: 'where', lat: 41.0369, lon: 28.985, radiusKm: 2 });
+    expect(request.filters.length).toBeGreaterThan(0);
+    // The cells narrow; the circle settles the edge. Without the field the
+    // cells are the whole answer and are a superset of the circle.
+    const withoutField = PulseIndex.query()
+      .withinRadius({ lat: 41.0369, lng: 28.985, radiusKm: 2 })
+      .toRequest();
+    expect(withoutField.geo).toBeUndefined();
+    expect(withoutField.filters.length).toBe(request.filters.length);
+  });
+
+  it('refuses a circle it cannot measure', () => {
+    expect(() => PulseIndex.query().within('', 41, 29, 1)).toThrow();
+    expect(() => PulseIndex.query().within('where', Number.NaN, 29, 1)).toThrow();
+    expect(() => PulseIndex.query().within('where', 41, 29, -1)).toThrow();
+    expect(() => PulseIndex.query().nearest('', 41, 29)).toThrow();
+  });
+
 });

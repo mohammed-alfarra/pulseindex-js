@@ -318,6 +318,7 @@ function toIndexRequest(encoded: EncodedEntity): IndexEntityRequest {
   return {
     entityId: encoded.entityId,
     numbers: encoded.numbers,
+    points: encoded.points,
     categories: encoded.categories,
     tenantId: encoded.tenantId,
   };
