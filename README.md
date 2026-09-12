@@ -14,7 +14,7 @@ You send attributes to index and queries to run; PulseIndex returns matching ent
 - Typed fluent `QueryBuilder` matching `pulseindex-php`
 - Zero-dependency GeoHash radius coverage (`geo:{precision}:{hash}`)
 - Connection pooling, deadlines, and `x-api-key` / `Authorization: Bearer` metadata
-- Attribute flattening so plain objects index without a schema (categories, flags, geo tags, price)
+- Attribute flattening so plain objects index without a schema (categories, flags, geo tags), with numbers and positions under names you choose
 
 ## Installation
 
@@ -55,7 +55,18 @@ await client.index('1001', {
   categories: ['features:swimming_pool'],
   category: 'villa',
   status: 'listed',
-  price: 250000,
+
+  // Numbers under your own names. Any name, any whole number, any number of
+  // them, and each one takes a range or an order. There is no field the
+  // engine calls `price`.
+  numbers: { price: 250000, bedrooms: 3 },
+
+  // A position, in degrees. The engine packs it, so a radius is measured
+  // rather than approximated.
+  points: { where: { lat: 41.0082, lon: 28.9784 } },
+
+  // Still read, and still what generates the geo:5 / geo:6 tags that narrow
+  // which part of the index a radius search opens.
   lat: 41.0082,
   lng: 28.9784,
 });
@@ -67,17 +78,51 @@ const result = await client.search(
     .should(['category:villa', 'category:apartment'])
     .mustNot('status:sold')
     .range('price', 100000, 500000)
-    .withinRadius({ lat: 41.0082, lng: 28.9784, radiusKm: 5 })
+    .withinRadius({ lat: 41.0082, lng: 28.9784, radiusKm: 5, field: 'where' })
     .limit(50),
 );
 
-> **`withinRadius` is a fast pre-filter, not an exact radius.** It expands the
-> circle into geohash cells, which are rectangles, so results include some points
-> outside the radius — about 1.1x to 1.8x the circle's area. The engine stores no
-> coordinates, so filter the remainder from your own data after hydration.
-
 const ids = result.matchedEntityIds;
 await client.close();
+```
+
+### The radius is exact when you name the position field
+
+`withinRadius` expands the circle into geohash cells, which are rectangles, so
+the cells alone cover more than the circle does. Measured against a million
+records with PostgreSQL computing the same circle, a 5 km search returned **44
+rows where 22 were really inside**.
+
+Pass `field` — the name you indexed the position under — and the engine narrows
+on those cells and then measures the true distance. Same query, **22 rows**, and
+it agreed with both PostgreSQL and Typesense on the id set. Leave `field` out and
+the cells are the whole answer, which is the 4.x behaviour.
+
+### The nearest K
+
+```ts
+const result = await client.search(
+  PulseIndex.query()
+    .must('status:available')
+    .nearest('where', 41.0082, 28.9784)
+    .limit(10),
+);
+```
+
+Ordered by distance, nearest first, drawn from whatever the other filters left.
+No radius has to be guessed to keep it quick. Ordering is to the centimetre,
+which is the precision a stored position has.
+
+### A count that says whether it is a count
+
+A page stops as soon as it is full, so the `totalMatches` it carries is only
+what the scan had reached by then. Read `totalIsExact` before showing the
+number, or ask for both in one request:
+
+```ts
+const { matchedEntityIds, totalMatches } = await client.searchWithTotal(
+  PulseIndex.query().must('status:available').limit(20),
+);
 ```
 
 Index-time geo tags should use the same dual precision as radius queries:
@@ -127,21 +172,26 @@ const client = new PulseIndex({
 
 ## Indexing
 
-`index()` accepts a string/number entity id plus a flat attribute object. Reserved keys (`price`, `tenantId`, `lat` / `lng`, `categories`, …) map onto dedicated fields; every other key becomes a namespaced term (`status:listed`, `amenities:parking`) you can filter on. Coordinates automatically add `geo:5:…` and `geo:6:…` tags.
+`index()` accepts a string/number entity id plus a flat attribute object. `numbers` and `points` carry the fields you want ranges, orders and circles on, under names you pick. A few keys are consumed rather than turned into tags (`tenantId`, `lat` / `lng`, `categories`, `numbers`, `points`); every other key becomes a namespaced term (`status:listed`, `amenities:parking`) you can filter on. Coordinates automatically add `geo:5:…` and `geo:6:…` tags.
+
+`price` and `locationPrefix` used to be reserved this way and are not any more: the engine has no field of its own for either. A bare `price: 250000` is now the tag `price:250000`, so a range on it would find nothing — put it in `numbers`.
+
+A fraction in `numbers` is refused rather than rounded. The engine's column is a 64-bit integer, and `4.3` used to be sent as `4` without a word. Scale it yourself: a price in cents, a rating out of 100.
 
 ```ts
 await client.index('1001', {
   categories: ['feature:pool'],
   amenities: ['parking', 'gym'],
   furnished: true,
-  price: 1500,
+  numbers: { price: 1500 },
+  points: { where: { lat: 24.7136, lon: 46.6753 } },
   lat: 24.7136,
   lng: 46.6753,
 });
 
 await client.batchIndex([
-  { id: '1002', attributes: { categories: ['feature:garden'], price: 900 } },
-  { entityId: 1003, categories: ['feature:pool'], price: 2000 },
+  { id: '1002', attributes: { categories: ['feature:garden'], numbers: { price: 900 } } },
+  { entityId: 1003, categories: ['feature:pool'], numbers: { price: 2000 } },
 ]);
 
 await client.delete('1001');

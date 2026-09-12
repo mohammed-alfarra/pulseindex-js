@@ -1,5 +1,22 @@
 # Changelog
 
+## 5.0.1
+
+### The README was documenting 4.x
+
+Every indexing example showed a bare `price: 250000`, which 5.0.0 turns into
+the tag `price:250000` rather than a number, so a range on it would find
+nothing. Corrected, along with the claim that `price` and `locationPrefix` are
+reserved keys — they are not, and the engine has no field of its own for
+either.
+
+Added what 5.0.0 shipped and the README never mentioned: passing `field` to
+`withinRadius` so the circle is measured rather than approximated, `nearest()`,
+`searchWithTotal()`, and that a fraction in `numbers` is refused rather than
+rounded.
+
+No code changed.
+
 ## 5.0.0
 
 Needs a PulseIndex engine at v2.0.0 or later. The wire contract is a
